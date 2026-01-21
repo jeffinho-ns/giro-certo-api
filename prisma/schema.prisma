@@ -1,0 +1,438 @@
+// This is your Prisma schema file,
+// more info: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// MODELOS DE USUÁRIO E AUTENTICAÇÃO
+// ============================================
+
+enum SubscriptionType {
+  standard
+  premium
+}
+
+enum PilotProfile {
+  FIM_DE_SEMANA
+  URBANO
+  TRABALHO
+  PISTA
+}
+
+model User {
+  id              String   @id @default(cuid())
+  name            String
+  email           String   @unique
+  password        String   // Hash da senha
+  age             Int
+  photoUrl        String?
+  pilotProfile    PilotProfile @default(URBANO)
+  
+  // Sistema de Assinaturas
+  isSubscriber    Boolean  @default(false)
+  subscriptionType SubscriptionType @default(standard)
+  subscriptionExpiresAt DateTime?
+  
+  // Sistema de Fidelidade
+  loyaltyPoints   Int      @default(0)
+  
+  // Localização em Tempo Real
+  currentLat      Float?
+  currentLng      Float?
+  lastLocationUpdate DateTime?
+  isOnline        Boolean  @default(false)
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relacionamentos
+  bikes           Bike[]
+  maintenanceLogs MaintenanceLog[]
+  deliveryOrders  DeliveryOrder[]
+  wallet          Wallet?
+  walletTransactions WalletTransaction[]
+  posts           Post[]
+  postLikes       PostLike[]
+  comments        Comment[]
+  ratings         Rating[]
+  
+  @@index([email])
+  @@index([isSubscriber, isOnline])
+  @@index([currentLat, currentLng])
+}
+
+// ============================================
+// MODELOS DE MOTOS E MANUTENÇÃO
+// ============================================
+
+enum MaintenanceCategory {
+  OLEO
+  PNEUS
+  TRAVOES
+  FILTROS
+  TRANSMISSAO
+}
+
+enum MaintenanceStatus {
+  OK
+  ATENCAO
+  CRITICO
+}
+
+model Bike {
+  id                String   @id @default(cuid())
+  userId            String
+  model             String
+  brand             String
+  plate             String   @unique
+  currentKm         Int      @default(0)
+  oilType           String
+  frontTirePressure Float
+  rearTirePressure  Float
+  photoUrl          String?
+  
+  // Timestamps
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relacionamentos
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  maintenanceLogs   MaintenanceLog[]
+  
+  @@index([userId])
+  @@index([plate])
+}
+
+model MaintenanceLog {
+  id                  String   @id @default(cuid())
+  bikeId              String
+  userId              String
+  partName            String
+  category            MaintenanceCategory
+  lastChangeKm        Int
+  recommendedChangeKm Int
+  currentKm           Int
+  wearPercentage      Float    // 0.0 a 1.0
+  status              MaintenanceStatus
+  
+  // Timestamps
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  // Relacionamentos
+  bike                Bike     @relation(fields: [bikeId], references: [id], onDelete: Cascade)
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([bikeId])
+  @@index([userId])
+  @@index([status])
+  @@index([category])
+}
+
+// ============================================
+// MODELOS DE PARCEIROS E PROMOÇÕES
+// ============================================
+
+enum PartnerType {
+  STORE
+  MECHANIC
+}
+
+model Partner {
+  id                String   @id @default(cuid())
+  name              String
+  type              PartnerType
+  address           String
+  latitude          Float
+  longitude         Float
+  phone             String?
+  email             String?
+  rating            Float    @default(0.0)
+  reviewCount       Int      @default(0)
+  isTrusted         Boolean  @default(false)
+  specialties       String[] // Ex: Óleo, Pneus, Travões
+  photoUrl          String?
+  
+  // Timestamps
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relacionamentos
+  promotions        Promotion[]
+  deliveryOrders    DeliveryOrder[]
+  ratings           Rating[]
+  
+  @@index([type, isTrusted])
+  @@index([latitude, longitude])
+}
+
+model Promotion {
+  id                  String   @id @default(cuid())
+  partnerId           String
+  description         String
+  code                String   @unique
+  discountPercentage  Float
+  category            String?  // Categoria da peça relacionada (opcional)
+  minPurchaseValue    Float?
+  maxDiscountValue    Float?
+  validFrom           DateTime
+  validUntil          DateTime
+  isActive            Boolean  @default(true)
+  usageCount          Int      @default(0)
+  maxUsage            Int?     // Limite de uso (null = ilimitado)
+  
+  // Timestamps
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  // Relacionamentos
+  partner             Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  
+  @@index([partnerId])
+  @@index([code])
+  @@index([isActive, validFrom, validUntil])
+}
+
+// ============================================
+// MODELOS DE DELIVERY E PEDIDOS
+// ============================================
+
+enum DeliveryStatus {
+  pending
+  accepted
+  inProgress
+  completed
+  cancelled
+}
+
+enum DeliveryPriority {
+  low
+  normal
+  high
+  urgent
+}
+
+model DeliveryOrder {
+  id                  String   @id @default(cuid())
+  storeId             String
+  storeName           String
+  storeAddress        String
+  storeLatitude       Float
+  storeLongitude      Float
+  deliveryAddress     String
+  deliveryLatitude    Float
+  deliveryLongitude   Float
+  recipientName       String?
+  recipientPhone      String?
+  notes               String?
+  
+  // Valores Financeiros
+  value               Float    // Valor do pedido
+  deliveryFee         Float    // Taxa de entrega
+  appCommission       Float    // Comissão do app (R$ 1,00 padrão / R$ 3,00 premium)
+  
+  // Status e Prioridade
+  status              DeliveryStatus @default(pending)
+  priority            DeliveryPriority @default(normal)
+  
+  // Informações do Motociclista
+  riderId             String?
+  riderName           String?
+  distance            Float?   // Distância em km
+  estimatedTime       Int?     // Tempo estimado em minutos
+  
+  // Timestamps
+  createdAt           DateTime @default(now())
+  acceptedAt          DateTime?
+  inProgressAt        DateTime?
+  completedAt         DateTime?
+  cancelledAt         DateTime?
+  
+  // Relacionamentos
+  partner             Partner  @relation(fields: [storeId], references: [id])
+  rider               User?    @relation(fields: [riderId], references: [id])
+  tracking            DeliveryTracking[]
+  ratings             Rating[]
+  
+  @@index([storeId])
+  @@index([riderId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([storeLatitude, storeLongitude])
+  @@index([deliveryLatitude, deliveryLongitude])
+}
+
+model DeliveryTracking {
+  id              String   @id @default(cuid())
+  deliveryOrderId String
+  latitude        Float
+  longitude       Float
+  heading         Float?   // Direção em graus
+  speed           Float?   // Velocidade em km/h
+  timestamp       DateTime @default(now())
+  
+  // Relacionamentos
+  deliveryOrder   DeliveryOrder @relation(fields: [deliveryOrderId], references: [id], onDelete: Cascade)
+  
+  @@index([deliveryOrderId])
+  @@index([timestamp])
+}
+
+// ============================================
+// MODELOS DE WALLET E COMISSÕES
+// ============================================
+
+enum TransactionType {
+  COMMISSION      // Comissão de corrida (R$ 1,00 ou R$ 3,00)
+  WITHDRAWAL      // Saque
+  BONUS           // Bônus por pontos
+  REFUND          // Reembolso
+}
+
+enum TransactionStatus {
+  pending
+  completed
+  failed
+  cancelled
+}
+
+model Wallet {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  balance         Float    @default(0.0)
+  
+  // Estatísticas
+  totalEarned     Float    @default(0.0)
+  totalWithdrawn  Float    @default(0.0)
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relacionamentos
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions    WalletTransaction[]
+  
+  @@index([userId])
+}
+
+model WalletTransaction {
+  id              String   @id @default(cuid())
+  walletId        String
+  userId          String
+  type            TransactionType
+  amount          Float
+  description     String?
+  status          TransactionStatus @default(pending)
+  
+  // Referência à corrida (se aplicável)
+  deliveryOrderId String?
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  completedAt     DateTime?
+  
+  // Relacionamentos
+  wallet          Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([walletId])
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ============================================
+// MODELOS DE COMUNIDADE
+// ============================================
+
+model Post {
+  id              String   @id @default(cuid())
+  userId          String
+  content         String
+  images          String[] // URLs das imagens
+  likesCount      Int      @default(0)
+  commentsCount   Int      @default(0)
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relacionamentos
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  likes           PostLike[]
+  comments        Comment[]
+  
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model PostLike {
+  id              String   @id @default(cuid())
+  postId          String
+  userId          String
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  
+  // Relacionamentos
+  post            Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+}
+
+model Comment {
+  id              String   @id @default(cuid())
+  postId          String
+  userId          String
+  content         String
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relacionamentos
+  post            Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([postId])
+  @@index([userId])
+}
+
+// ============================================
+// MODELOS DE AVALIAÇÕES
+// ============================================
+
+model Rating {
+  id              String   @id @default(cuid())
+  userId          String
+  deliveryOrderId String?
+  partnerId       String?
+  rating          Int      // 1 a 5
+  comment         String?
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relacionamentos
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveryOrder   DeliveryOrder? @relation(fields: [deliveryOrderId], references: [id], onDelete: SetNull)
+  partner         Partner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  
+  @@index([userId])
+  @@index([deliveryOrderId])
+  @@index([partnerId])
+}
