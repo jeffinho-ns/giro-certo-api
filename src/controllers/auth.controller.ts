@@ -21,7 +21,9 @@ export class AuthController {
       const result = await authService.login(data);
       res.json(result);
     } catch (error: any) {
-      res.status(401).json({ error: error.message });
+      console.error('Login error:', error);
+      const errorMessage = error?.message || error?.toString() || 'Email ou senha inválidos';
+      res.status(401).json({ error: errorMessage });
     }
   }
 

@@ -83,33 +83,34 @@ export class AuthService {
   }
 
   async login(data: LoginDto) {
-    // Buscar usuário
-    const user = await queryOne<User>(
-      'SELECT * FROM "User" WHERE email = $1',
-      [data.email]
-    );
+    try {
+      // Buscar usuário
+      const user = await queryOne<User>(
+        'SELECT * FROM "User" WHERE email = $1',
+        [data.email]
+      );
 
-    if (!user) {
-      throw new Error('Email ou senha inválidos');
-    }
+      if (!user) {
+        throw new Error('Email ou senha inválidos');
+      }
 
-    // Verificar senha
-    const validPassword = await bcrypt.compare(data.password, user.password);
+      // Verificar senha
+      const validPassword = await bcrypt.compare(data.password, user.password);
 
-    if (!validPassword) {
-      throw new Error('Email ou senha inválidos');
-    }
+      if (!validPassword) {
+        throw new Error('Email ou senha inválidos');
+      }
 
-    // Garantir que role existe (fallback para USER se não existir)
-    const userRole = user.role || UserRole.USER;
+      // Garantir que role existe (fallback para USER se não existir)
+      const userRole = user.role || UserRole.USER;
 
-    // Gerar token
-    const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
-    const token = jwt.sign(
-      { userId: user.id, role: userRole },
-      JWT_SECRET,
-      { expiresIn } as SignOptions
-    );
+      // Gerar token
+      const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
+      const token = jwt.sign(
+        { userId: user.id, role: userRole },
+        JWT_SECRET,
+        { expiresIn } as SignOptions
+      );
 
     // Atualizar status online
     await query(
