@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { query, queryOne } from '../lib/db';
-import { CreateBikeDto, CreateMaintenanceLogDto, Bike, MaintenanceLog, User } from '../types';
+import { CreateBikeDto, CreateMaintenanceLogDto, Bike, MaintenanceLog, User, VehicleType } from '../types';
 import { generateId } from '../utils/id';
 
 const router = Router();
@@ -41,7 +41,7 @@ router.get('/me/bikes', authenticateToken, async (req: AuthRequest, res: Respons
   }
 });
 
-// Criar moto
+// Criar veículo (moto ou bicicleta)
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     if (!req.userId) {
@@ -49,25 +49,38 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     }
 
     const data: CreateBikeDto = req.body;
+    const vehicleType = data.vehicleType || VehicleType.MOTORCYCLE; // Default para moto
     const bikeId = generateId();
+
+    // Validações baseadas no tipo de veículo
+    if (vehicleType === VehicleType.MOTORCYCLE) {
+      if (!data.plate) {
+        return res.status(400).json({ error: 'Placa é obrigatória para motos' });
+      }
+    }
+    // Para bicicletas, plate é opcional
 
     await query(
       `INSERT INTO "Bike" (
-        id, "userId", model, brand, plate, "currentKm",
-        "oilType", "frontTirePressure", "rearTirePressure", "photoUrl",
+        id, "userId", model, brand, "vehicleType", plate, "currentKm",
+        "oilType", "frontTirePressure", "rearTirePressure", 
+        "photoUrl", "vehiclePhotoUrl", "platePhotoUrl",
         "createdAt", "updatedAt"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())`,
       [
         bikeId,
         req.userId,
         data.model,
         data.brand,
-        data.plate,
+        vehicleType,
+        data.plate || null, // Nullable para bicicletas
         data.currentKm,
-        data.oilType,
-        data.frontTirePressure,
-        data.rearTirePressure,
+        data.oilType || null, // Opcional para bicicletas
+        data.frontTirePressure || null, // Opcional para bicicletas
+        data.rearTirePressure || null, // Opcional para bicicletas
         data.photoUrl || null,
+        data.vehiclePhotoUrl || null,
+        data.platePhotoUrl || null,
       ]
     );
 

@@ -204,4 +204,56 @@ router.put('/:userId/role', authenticateToken, requireAdmin, async (req: AuthReq
   }
 });
 
+// Conceder/remover selo de verificação (apenas admin)
+router.put('/:userId/verification-badge', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+    const { verificationBadge } = req.body;
+
+    if (typeof verificationBadge !== 'boolean') {
+      return res.status(400).json({ error: 'verificationBadge deve ser um booleano' });
+    }
+
+    // Se está concedendo o selo, verificar se o usuário tem documentos verificados
+    if (verificationBadge) {
+      const user = await queryOne<User>(
+        `SELECT "hasVerifiedDocuments" FROM "User" WHERE id = $1`,
+        [userId]
+      );
+
+      if (!user) {
+        return res.status(404).json({ error: 'Usuário não encontrado' });
+      }
+
+      if (!user.hasVerifiedDocuments) {
+        return res.status(400).json({ 
+          error: 'Não é possível conceder selo de verificação: usuário não possui documentos verificados' 
+        });
+      }
+    }
+
+    await query(
+      `UPDATE "User" 
+       SET "verificationBadge" = $1, "updatedAt" = NOW() 
+       WHERE id = $2`,
+      [verificationBadge, userId]
+    );
+
+    const updatedUser = await queryOne<User>(
+      `SELECT id, name, email, "verificationBadge", "hasVerifiedDocuments" 
+       FROM "User" WHERE id = $1`,
+      [userId]
+    );
+
+    res.json({ 
+      message: verificationBadge 
+        ? 'Selo de verificação concedido com sucesso' 
+        : 'Selo de verificação removido com sucesso',
+      user: updatedUser 
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 export default router;

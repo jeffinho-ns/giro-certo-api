@@ -17,10 +17,20 @@ export class DeliveryController {
 
   async findMatchingRiders(req: Request, res: Response) {
     try {
-      const criteria: MatchingCriteria = {
+      const criteria: MatchingCriteria & {
+        storeLatitude?: number;
+        storeLongitude?: number;
+        deliveryLatitude?: number;
+        deliveryLongitude?: number;
+      } = {
         latitude: parseFloat(req.query.lat as string),
         longitude: parseFloat(req.query.lng as string),
         radius: req.query.radius ? parseFloat(req.query.radius as string) : 5,
+        // Informações opcionais para cálculo inteligente de matching
+        storeLatitude: req.query.storeLat ? parseFloat(req.query.storeLat as string) : undefined,
+        storeLongitude: req.query.storeLng ? parseFloat(req.query.storeLng as string) : undefined,
+        deliveryLatitude: req.query.deliveryLat ? parseFloat(req.query.deliveryLat as string) : undefined,
+        deliveryLongitude: req.query.deliveryLng ? parseFloat(req.query.deliveryLng as string) : undefined,
       };
 
       if (!criteria.latitude || !criteria.longitude) {

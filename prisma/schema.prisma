@@ -43,6 +43,11 @@ model User {
   // Sistema de Fidelidade
   loyaltyPoints   Int      @default(0)
   
+  // Sistema de Verificação
+  hasVerifiedDocuments Boolean @default(false)
+  verificationBadge    Boolean @default(false) // Selo de Confiança
+  maintenanceBlockOverride Boolean @default(false) // Override manual de bloqueio por manutenção
+  
   // Localização em Tempo Real
   currentLat      Float?
   currentLng      Float?
@@ -63,6 +68,8 @@ model User {
   postLikes       PostLike[]
   comments        Comment[]
   ratings         Rating[]
+  documents       CourierDocument[]
+  verificationSelfies VerificationSelfie[]
   
   @@index([email])
   @@index([isSubscriber, isOnline])
@@ -72,6 +79,11 @@ model User {
 // ============================================
 // MODELOS DE MOTOS E MANUTENÇÃO
 // ============================================
+
+enum VehicleType {
+  MOTORCYCLE
+  BICYCLE
+}
 
 enum MaintenanceCategory {
   OLEO
@@ -92,12 +104,15 @@ model Bike {
   userId            String
   model             String
   brand             String
-  plate             String   @unique
+  vehicleType       VehicleType @default(MOTORCYCLE)
+  plate             String?  @unique // Nullable para bicicletas
   currentKm         Int      @default(0)
-  oilType           String
-  frontTirePressure Float
-  rearTirePressure  Float
+  oilType           String?
+  frontTirePressure Float?
+  rearTirePressure  Float?
   photoUrl          String?
+  vehiclePhotoUrl   String?  // Foto do veículo
+  platePhotoUrl     String?  // Foto da placa (apenas para motos)
   
   // Timestamps
   createdAt         DateTime @default(now())
@@ -109,6 +124,7 @@ model Bike {
   
   @@index([userId])
   @@index([plate])
+  @@index([vehicleType])
 }
 
 model MaintenanceLog {
@@ -435,4 +451,62 @@ model Rating {
   @@index([userId])
   @@index([deliveryOrderId])
   @@index([partnerId])
+}
+
+// ============================================
+// MODELOS DE DOCUMENTOS E VERIFICAÇÃO
+// ============================================
+
+enum DocumentType {
+  RG
+  CNH
+  PASSPORT
+}
+
+enum DocumentStatus {
+  PENDING      // Aguardando upload
+  UPLOADED     // Upload realizado, aguardando revisão
+  APPROVED     // Aprovado pelo admin
+  REJECTED     // Rejeitado pelo admin
+  EXPIRED      // Documento expirado
+}
+
+model CourierDocument {
+  id              String   @id @default(cuid())
+  userId          String
+  documentType    DocumentType
+  status          DocumentStatus @default(PENDING)
+  fileUrl         String?        // URL da imagem do documento
+  expirationDate  DateTime?      // Data de expiração (se aplicável)
+  verifiedAt      DateTime?      // Quando foi aprovado
+  verifiedBy      String?        // ID do admin que aprovou
+  rejectionReason String?        // Motivo da rejeição (se aplicável)
+  notes           String?        // Observações do admin
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([status])
+  @@index([documentType])
+}
+
+model VerificationSelfie {
+  id              String   @id @default(cuid())
+  userId          String
+  fileUrl         String   // URL da selfie
+  status          DocumentStatus @default(UPLOADED)
+  verifiedAt      DateTime?
+  verifiedBy      String?        // ID do admin
+  notes           String?
+  
+  createdAt       DateTime @default(now())
+  
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
 }

@@ -25,9 +25,54 @@ export enum MaintenanceStatus {
   CRITICO = 'CRITICO',
 }
 
+export enum VehicleType {
+  MOTORCYCLE = 'MOTORCYCLE',
+  BICYCLE = 'BICYCLE',
+}
+
+export enum DocumentType {
+  RG = 'RG',
+  CNH = 'CNH',
+  PASSPORT = 'PASSPORT',
+}
+
+export enum DocumentStatus {
+  PENDING = 'PENDING',
+  UPLOADED = 'UPLOADED',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  EXPIRED = 'EXPIRED',
+}
+
 export enum PartnerType {
   STORE = 'STORE',
   MECHANIC = 'MECHANIC',
+}
+
+export enum PaymentPlanType {
+  MONTHLY_SUBSCRIPTION = 'MONTHLY_SUBSCRIPTION',
+  PERCENTAGE_PER_ORDER = 'PERCENTAGE_PER_ORDER',
+}
+
+export enum PaymentStatus {
+  ACTIVE = 'ACTIVE',
+  WARNING = 'WARNING',
+  OVERDUE = 'OVERDUE',
+  SUSPENDED = 'SUSPENDED',
+}
+
+export enum DisputeStatus {
+  OPEN = 'OPEN',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  RESOLVED = 'RESOLVED',
+  CLOSED = 'CLOSED',
+}
+
+export enum DisputeType {
+  DELIVERY_ISSUE = 'DELIVERY_ISSUE',
+  PAYMENT_ISSUE = 'PAYMENT_ISSUE',
+  RIDER_COMPLAINT = 'RIDER_COMPLAINT',
+  STORE_COMPLAINT = 'STORE_COMPLAINT',
 }
 
 export enum DeliveryStatus {
@@ -120,12 +165,15 @@ export interface CreateBikeDto {
   userId: string;
   model: string;
   brand: string;
-  plate: string;
+  vehicleType?: VehicleType;
+  plate?: string; // Opcional para bicicletas
   currentKm: number;
-  oilType: string;
-  frontTirePressure: number;
-  rearTirePressure: number;
+  oilType?: string; // Opcional para bicicletas
+  frontTirePressure?: number; // Opcional para bicicletas
+  rearTirePressure?: number; // Opcional para bicicletas
   photoUrl?: string;
+  vehiclePhotoUrl?: string;
+  platePhotoUrl?: string; // Apenas para motos
 }
 
 export interface CreateMaintenanceLogDto {
@@ -166,6 +214,9 @@ export interface User {
   subscriptionType: SubscriptionType;
   subscriptionExpiresAt: Date | null;
   loyaltyPoints: number;
+  hasVerifiedDocuments: boolean;
+  verificationBadge: boolean;
+  maintenanceBlockOverride: boolean;
   currentLat: number | null;
   currentLng: number | null;
   lastLocationUpdate: Date | null;
@@ -179,12 +230,15 @@ export interface Bike {
   userId: string;
   model: string;
   brand: string;
-  plate: string;
+  vehicleType: VehicleType;
+  plate: string | null; // Nullable para bicicletas
   currentKm: number;
-  oilType: string;
-  frontTirePressure: number;
-  rearTirePressure: number;
+  oilType: string | null; // Nullable para bicicletas
+  frontTirePressure: number | null; // Nullable para bicicletas
+  rearTirePressure: number | null; // Nullable para bicicletas
   photoUrl: string | null;
+  vehiclePhotoUrl: string | null;
+  platePhotoUrl: string | null; // Apenas para motos
   createdAt: Date;
   updatedAt: Date;
 }
@@ -218,6 +272,32 @@ export interface Partner {
   isTrusted: boolean;
   specialties: string[];
   photoUrl: string | null;
+  // Dados Empresariais
+  cnpj: string | null;
+  companyName: string | null; // Razão Social
+  tradingName: string | null; // Nome Fantasia
+  stateRegistration: string | null; // Inscrição Estadual
+  // Geolocalização Expandida
+  maxServiceRadius: number | null; // Raio máximo de atendimento em km
+  // Configurações Operacionais
+  avgPreparationTime: number | null; // Tempo médio de preparo em minutos
+  operatingHours: any | null; // JSON: {"monday": {"open": "08:00", "close": "22:00"}, ...}
+  // Status
+  isBlocked: boolean; // Bloqueado se inadimplente
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface PartnerPayment {
+  id: string;
+  partnerId: string;
+  planType: PaymentPlanType;
+  monthlyFee: number | null; // Valor da mensalidade (se MONTHLY_SUBSCRIPTION)
+  percentageFee: number | null; // Percentual por corrida (se PERCENTAGE_PER_ORDER)
+  status: PaymentStatus;
+  dueDate: Date | null; // Data de vencimento
+  lastPaymentDate: Date | null; // Último pagamento realizado
+  paymentHistory: any; // JSON array: [{date, amount, status}]
   createdAt: Date;
   updatedAt: Date;
 }
@@ -261,6 +341,19 @@ export interface Wallet {
   updatedAt: Date;
 }
 
+export interface WalletTransaction {
+  id: string;
+  walletId: string;
+  userId: string;
+  type: TransactionType;
+  amount: number;
+  description: string | null;
+  status: TransactionStatus;
+  deliveryOrderId: string | null;
+  createdAt: Date;
+  completedAt: Date | null;
+}
+
 export interface Post {
   id: string;
   userId: string;
@@ -283,4 +376,150 @@ export interface Image {
   isPrimary: boolean;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface CourierDocument {
+  id: string;
+  userId: string;
+  documentType: DocumentType;
+  status: DocumentStatus;
+  fileUrl: string | null;
+  expirationDate: Date | null;
+  verifiedAt: Date | null;
+  verifiedBy: string | null; // ID do admin
+  rejectionReason: string | null;
+  notes: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface VerificationSelfie {
+  id: string;
+  userId: string;
+  fileUrl: string;
+  status: DocumentStatus;
+  verifiedAt: Date | null;
+  verifiedBy: string | null; // ID do admin
+  notes: string | null;
+  createdAt: Date;
+}
+
+// DTOs para documentos
+export interface CreateCourierDocumentDto {
+  userId: string;
+  documentType: DocumentType;
+  fileUrl: string;
+  expirationDate?: Date;
+}
+
+export interface UpdateDocumentStatusDto {
+  status: DocumentStatus;
+  verifiedBy?: string; // ID do admin
+  rejectionReason?: string;
+  notes?: string;
+}
+
+export interface CreateVerificationSelfieDto {
+  userId: string;
+  fileUrl: string;
+}
+
+export interface UpdateVerificationSelfieDto {
+  status: DocumentStatus;
+  verifiedBy?: string; // ID do admin
+  notes?: string;
+}
+
+// DTOs para Partner
+export interface CreatePartnerDto {
+  name: string;
+  type: PartnerType;
+  address: string;
+  latitude: number;
+  longitude: number;
+  phone?: string;
+  email?: string;
+  specialties?: string[];
+  photoUrl?: string;
+  // Dados Empresariais
+  cnpj?: string;
+  companyName?: string;
+  tradingName?: string;
+  stateRegistration?: string;
+  // Configurações
+  maxServiceRadius?: number;
+  avgPreparationTime?: number;
+  operatingHours?: any;
+}
+
+export interface UpdatePartnerDto {
+  name?: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
+  phone?: string;
+  email?: string;
+  specialties?: string[];
+  photoUrl?: string;
+  cnpj?: string;
+  companyName?: string;
+  tradingName?: string;
+  stateRegistration?: string;
+  maxServiceRadius?: number;
+  avgPreparationTime?: number;
+  operatingHours?: any;
+  isBlocked?: boolean;
+}
+
+export interface CreatePartnerPaymentDto {
+  partnerId: string;
+  planType: PaymentPlanType;
+  monthlyFee?: number; // Obrigatório se planType = MONTHLY_SUBSCRIPTION
+  percentageFee?: number; // Obrigatório se planType = PERCENTAGE_PER_ORDER
+  dueDate?: Date;
+}
+
+export interface UpdatePartnerPaymentDto {
+  planType?: PaymentPlanType;
+  monthlyFee?: number;
+  percentageFee?: number;
+  status?: PaymentStatus;
+  dueDate?: Date;
+}
+
+export interface RecordPaymentDto {
+  amount: number;
+  paymentDate: Date;
+  description?: string;
+}
+
+export interface Dispute {
+  id: string;
+  deliveryOrderId: string | null;
+  reportedBy: string;
+  disputeType: DisputeType;
+  status: DisputeStatus;
+  description: string;
+  resolution: string | null;
+  resolvedBy: string | null;
+  resolvedAt: Date | null;
+  locationLogs: any | null; // JSON array of GPS points
+  createdAt: Date;
+  updatedAt: Date;
+  // Relacionamentos (populados via JOIN)
+  deliveryOrder?: DeliveryOrder;
+  reporter?: User;
+  resolver?: User;
+}
+
+export interface CreateDisputeDto {
+  deliveryOrderId?: string;
+  disputeType: DisputeType;
+  description: string;
+  locationLogs?: any; // JSON array of GPS points
+}
+
+export interface ResolveDisputeDto {
+  resolution: string;
+  status?: DisputeStatus; // RESOLVED ou CLOSED
 }

@@ -1,5 +1,5 @@
 import { query, queryOne, transaction } from '../lib/db';
-import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria, DeliveryStatus, DeliveryOrder, User, Partner, Wallet, TransactionType, TransactionStatus } from '../types';
+import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria, DeliveryStatus, DeliveryOrder, User, Partner, Wallet, TransactionType, TransactionStatus, VehicleType, MaintenanceStatus } from '../types';
 import { calculateDistance } from '../utils/haversine';
 import { generateId } from '../utils/id';
 
@@ -17,6 +17,11 @@ export class DeliveryService {
 
     if (!partner) {
       throw new Error('Parceiro não encontrado');
+    }
+
+    // Verificar se parceiro está bloqueado
+    if (partner.isBlocked) {
+      throw new Error('Parceiro bloqueado. Não é possível criar pedidos. Entre em contato com o suporte.');
     }
 
     const orderId = generateId();
@@ -73,19 +78,61 @@ export class DeliveryService {
   }
 
   /**
-   * Algoritmo de Matching
-   * Prioriza: 1. Assinantes Premium -> 2. Proximidade -> 3. Reputação
+   * Algoritmo de Matching Inteligente
+   * Considera tipo de veículo, distância da corrida, manutenção e calcula ETA
+   * Prioriza: 1. Assinantes Premium -> 2. Tipo de veículo adequado -> 3. Proximidade -> 4. Reputação
    */
-  async findMatchingRiders(criteria: MatchingCriteria) {
-    const { latitude, longitude, radius = 5 } = criteria;
+  async findMatchingRiders(criteria: MatchingCriteria & { 
+    storeLatitude?: number; 
+    storeLongitude?: number; 
+    deliveryLatitude?: number; 
+    deliveryLongitude?: number;
+  }) {
+    const { latitude, longitude, radius = 5, storeLatitude, storeLongitude, deliveryLatitude, deliveryLongitude } = criteria;
 
-    // Buscar todos os motociclistas online
-    const riders = await query<User & { wallet: Wallet; activeOrders: number; averageRating: number }>(
+    // Calcular distância da corrida completa (se fornecida)
+    let deliveryDistance: number | null = null;
+    if (storeLatitude && storeLongitude && deliveryLatitude && deliveryLongitude) {
+      deliveryDistance = calculateDistance(
+        storeLatitude,
+        storeLongitude,
+        deliveryLatitude,
+        deliveryLongitude
+      );
+    }
+
+    // Buscar todos os entregadores online com informações de veículo e manutenção
+    const riders = await query<User & { 
+      wallet: Wallet; 
+      activeOrders: number; 
+      averageRating: number;
+      bike: any;
+      hasCriticalMaintenance: boolean;
+    }>(
       `SELECT 
         u.*,
         w.* as wallet,
         COUNT(DISTINCT CASE WHEN do.status IN ('accepted', 'inProgress') THEN do.id END) as "activeOrders",
-        COALESCE(AVG(r.rating), 0) as "averageRating"
+        COALESCE(AVG(r.rating), 0) as "averageRating",
+        -- Buscar bike principal do entregador
+        (
+          SELECT json_build_object(
+            'id', b.id,
+            'vehicleType', b."vehicleType",
+            'model', b.model,
+            'brand', b.brand
+          )
+          FROM "Bike" b
+          WHERE b."userId" = u.id
+          ORDER BY b."createdAt" DESC
+          LIMIT 1
+        ) as bike,
+        -- Verificar se tem manutenção crítica
+        EXISTS(
+          SELECT 1 FROM "MaintenanceLog" ml
+          WHERE ml."userId" = u.id
+            AND (ml.status = 'CRITICO' OR ml."wearPercentage" >= 0.9)
+        ) as "hasCriticalMaintenance"
        FROM "User" u
        LEFT JOIN "Wallet" w ON w."userId" = u.id
        LEFT JOIN "DeliveryOrder" do ON do."riderId" = u.id
@@ -96,24 +143,61 @@ export class DeliveryService {
        GROUP BY u.id, w.id`
     );
 
-    // Calcular distância e filtrar por raio
-    const ridersWithDistance = riders
+    // Calcular distância do entregador até a loja e filtrar por raio
+    const ridersWithInfo = riders
       .map((rider) => {
         if (!rider.currentLat || !rider.currentLng) return null;
-        const distance = calculateDistance(
+
+        // Distância do entregador até a loja
+        const distanceToStore = calculateDistance(
           latitude,
           longitude,
           rider.currentLat,
           rider.currentLng
         );
-        return { rider, distance };
+
+        // Verificar bloqueio por manutenção (a menos que tenha override)
+        if (rider.hasCriticalMaintenance && !rider.maintenanceBlockOverride) {
+          return null; // Pular entregador com manutenção crítica
+        }
+
+        // Obter tipo de veículo (default MOTORCYCLE se não tiver bike)
+        const bike = rider.bike || null;
+        const vehicleType = bike?.vehicleType || VehicleType.MOTORCYCLE;
+
+        // Se temos distância da corrida, aplicar regras por tipo de veículo
+        if (deliveryDistance !== null) {
+          if (vehicleType === VehicleType.BICYCLE && deliveryDistance > 3) {
+            return null; // Bicicletas só corridas até 3km
+          }
+          if (vehicleType === VehicleType.MOTORCYCLE && deliveryDistance > 10) {
+            return null; // Motos até 10km
+          }
+        }
+
+        // Calcular ETA baseado no tipo de veículo
+        let estimatedTime: number | null = null;
+        if (deliveryDistance !== null) {
+          const avgSpeed = vehicleType === VehicleType.BICYCLE ? 15 : 30; // km/h
+          estimatedTime = Math.round((deliveryDistance / avgSpeed) * 60); // minutos
+        }
+
+        return {
+          rider,
+          distanceToStore,
+          vehicleType,
+          estimatedTime,
+          deliveryDistance: deliveryDistance || null,
+        };
       })
-      .filter((r): r is { rider: typeof riders[0]; distance: number } => {
-        return r !== null && r.distance <= radius;
+      .filter((r): r is NonNullable<typeof r> => {
+        if (!r) return false;
+        // Filtrar por raio até a loja
+        return r.distanceToStore <= radius;
       });
 
-    // Ordenar: Premium primeiro, depois por distância, depois por reputação
-    ridersWithDistance.sort((a, b) => {
+    // Ordenar: Premium primeiro, depois tipo de veículo adequado, depois proximidade, depois reputação
+    ridersWithInfo.sort((a, b) => {
       const aIsPremium = a.rider.isSubscriber && a.rider.subscriptionType === 'premium';
       const bIsPremium = b.rider.isSubscriber && b.rider.subscriptionType === 'premium';
 
@@ -121,33 +205,55 @@ export class DeliveryService {
       if (aIsPremium && !bIsPremium) return -1;
       if (!aIsPremium && bIsPremium) return 1;
 
-      // 2. Proximidade (menor distância primeiro)
-      if (Math.abs(a.distance - b.distance) > 0.1) {
-        return a.distance - b.distance;
+      // 2. Se temos distância da corrida, priorizar veículo adequado
+      if (a.deliveryDistance !== null && b.deliveryDistance !== null) {
+        // Bicicletas para corridas curtas (≤3km), motos para todas
+        const aIsSuitable = a.deliveryDistance <= 3 || a.vehicleType === VehicleType.MOTORCYCLE;
+        const bIsSuitable = b.deliveryDistance <= 3 || b.vehicleType === VehicleType.MOTORCYCLE;
+        
+        if (aIsSuitable && !bIsSuitable) return -1;
+        if (!aIsSuitable && bIsSuitable) return 1;
+
+        // Se ambos são adequados, priorizar menor ETA
+        if (a.estimatedTime !== null && b.estimatedTime !== null) {
+          if (Math.abs(a.estimatedTime - b.estimatedTime) > 2) {
+            return a.estimatedTime - b.estimatedTime;
+          }
+        }
       }
 
-      // 3. Reputação (maior média de avaliação primeiro)
+      // 3. Proximidade até a loja (menor distância primeiro)
+      if (Math.abs(a.distanceToStore - b.distanceToStore) > 0.1) {
+        return a.distanceToStore - b.distanceToStore;
+      }
+
+      // 4. Reputação (maior média de avaliação primeiro)
       const aRating = a.rider.averageRating || 0;
       const bRating = b.rider.averageRating || 0;
       return bRating - aRating;
     });
 
-    return ridersWithDistance.map(({ rider, distance }) => ({
+    return ridersWithInfo.map(({ rider, distanceToStore, vehicleType, estimatedTime, deliveryDistance }) => ({
       id: rider.id,
       name: rider.name,
       email: rider.email,
-      distance: parseFloat(distance.toFixed(2)),
+      distance: parseFloat(distanceToStore.toFixed(2)),
+      deliveryDistance: deliveryDistance ? parseFloat(deliveryDistance.toFixed(2)) : null,
+      vehicleType,
+      estimatedTime,
       isPremium: rider.isSubscriber && rider.subscriptionType === 'premium',
       averageRating: rider.averageRating || 0,
       activeOrders: rider.activeOrders || 0,
       currentLat: rider.currentLat,
       currentLng: rider.currentLng,
+      hasVerifiedBadge: rider.verificationBadge || false,
     }));
   }
 
   /**
-   * Aceitar um pedido (motociclista)
+   * Aceitar um pedido (entregador)
    * Atualiza a comissão baseada no tipo de assinatura
+   * Calcula ETA baseado no tipo de veículo
    */
   async acceptOrder(orderId: string, riderId: string, riderName: string) {
     // Buscar pedido
@@ -164,27 +270,63 @@ export class DeliveryService {
       throw new Error('Pedido não está mais disponível');
     }
 
-    // Buscar motociclista
-    const rider = await queryOne<User>(
-      'SELECT * FROM "User" WHERE id = $1',
+    // Buscar entregador com bike
+    const rider = await queryOne<User & { bike: any }>(
+      `SELECT 
+        u.*,
+        (
+          SELECT json_build_object(
+            'id', b.id,
+            'vehicleType', b."vehicleType"
+          )
+          FROM "Bike" b
+          WHERE b."userId" = u.id
+          ORDER BY b."createdAt" DESC
+          LIMIT 1
+        ) as bike
+       FROM "User" u
+       WHERE u.id = $1`,
       [riderId]
     );
 
     if (!rider) {
-      throw new Error('Motociclista não encontrado');
+      throw new Error('Entregador não encontrado');
+    }
+
+    // Verificar bloqueio por manutenção (a menos que tenha override)
+    if (!rider.maintenanceBlockOverride) {
+      const criticalMaintenance = await queryOne<{ exists: boolean }>(
+        `SELECT EXISTS(
+          SELECT 1 FROM "MaintenanceLog" ml
+          WHERE ml."userId" = $1
+            AND (ml.status = 'CRITICO' OR ml."wearPercentage" >= 0.9)
+        ) as exists`,
+        [riderId]
+      );
+
+      if (criticalMaintenance?.exists) {
+        throw new Error('Entregador bloqueado por manutenção crítica. Entre em contato com o suporte.');
+      }
     }
 
     // Calcular comissão: R$ 3,00 para Premium, R$ 1,00 para Standard
     const commission =
       rider.isSubscriber && rider.subscriptionType === 'premium' ? 3.0 : 1.0;
 
-    // Calcular distância total
+    // Calcular distância total da corrida
     const distance = calculateDistance(
       order.storeLatitude,
       order.storeLongitude,
       order.deliveryLatitude,
       order.deliveryLongitude
     );
+
+    // Obter tipo de veículo (default MOTORCYCLE se não tiver bike)
+    const vehicleType = rider.bike?.vehicleType || VehicleType.MOTORCYCLE;
+
+    // Calcular ETA baseado no tipo de veículo
+    const avgSpeed = vehicleType === VehicleType.BICYCLE ? 15 : 30; // km/h
+    const estimatedTime = Math.round((distance / avgSpeed) * 60); // minutos
 
     // Atualizar pedido
     await query(
@@ -199,7 +341,7 @@ export class DeliveryService {
         riderName,
         commission,
         parseFloat(distance.toFixed(2)),
-        Math.round(distance * 3), // Estimativa: 3 min/km
+        estimatedTime,
         orderId,
       ]
     );

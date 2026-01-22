@@ -14,6 +14,12 @@ import bikesRoutes from './routes/bikes.routes';
 import walletRoutes from './routes/wallet.routes';
 import postsRoutes from './routes/posts.routes';
 import imagesRoutes from './routes/images.routes';
+import courierDocumentsRoutes from './routes/courier-documents.routes';
+import verificationSelfiesRoutes from './routes/verification-selfies.routes';
+import partnersRoutes from './routes/partners.routes';
+import disputesRoutes from './routes/disputes.routes';
+import reportsRoutes from './routes/reports.routes';
+import alertsRoutes from './routes/alerts.routes';
 
 dotenv.config();
 
@@ -63,6 +69,12 @@ app.use('/api/bikes', bikesRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/posts', postsRoutes);
 app.use('/api/images', imagesRoutes);
+app.use('/api/courier-documents', courierDocumentsRoutes);
+app.use('/api/verification-selfies', verificationSelfiesRoutes);
+app.use('/api/partners', partnersRoutes);
+app.use('/api/disputes', disputesRoutes);
+app.use('/api/reports', reportsRoutes);
+app.use('/api/alerts', alertsRoutes);
 
 // Error handler
 app.use(errorHandler);

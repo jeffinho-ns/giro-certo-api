@@ -6,21 +6,8 @@ require('dotenv').config();
 const DATABASE_URL = process.env.DATABASE_URL || 
   'postgresql://ciro_certo_db_user:Ocmeex5f2qUViao967jipLoAzsEDVzM5@dpg-d5oq5dpr0fns73afoq50-a.oregon-postgres.render.com/ciro_certo_db';
 
-// Converter URL do Prisma para formato PostgreSQL se necessário
-let connectionString = DATABASE_URL;
-if (connectionString.startsWith('prisma+')) {
-  // Extrair a URL real do Prisma
-  try {
-    const prismaData = JSON.parse(Buffer.from(connectionString.replace('prisma+postgres://', '').split('/')[0], 'base64').toString());
-    connectionString = prismaData.databaseUrl || DATABASE_URL;
-  } catch (e) {
-    // Se falhar, usar a URL do Render diretamente
-    connectionString = 'postgresql://ciro_certo_db_user:Ocmeex5f2qUViao967jipLoAzsEDVzM5@dpg-d5oq5dpr0fns73afoq50-a.oregon-postgres.render.com/ciro_certo_db';
-  }
-}
-
 const pool = new Pool({
-  connectionString: connectionString,
+  connectionString: DATABASE_URL,
   ssl: connectionString.includes('render.com') ? { rejectUnauthorized: false } : false,
 });
 

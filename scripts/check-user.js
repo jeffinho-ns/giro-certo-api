@@ -5,14 +5,8 @@ require('dotenv').config();
 const DATABASE_URL = process.env.DATABASE_URL || 
   'postgresql://ciro_certo_db_user:Ocmeex5f2qUViao967jipLoAzsEDVzM5@dpg-d5oq5dpr0fns73afoq50-a.oregon-postgres.render.com/ciro_certo_db';
 
-// Converter URL do Prisma para formato PostgreSQL se necessário
-let connectionString = DATABASE_URL;
-if (connectionString.startsWith('prisma+')) {
-  connectionString = 'postgresql://ciro_certo_db_user:Ocmeex5f2qUViao967jipLoAzsEDVzM5@dpg-d5oq5dpr0fns73afoq50-a.oregon-postgres.render.com/ciro_certo_db';
-}
-
 const pool = new Pool({
-  connectionString: connectionString,
+  connectionString: DATABASE_URL,
   ssl: connectionString.includes('render.com') ? { rejectUnauthorized: false } : false,
 });
 
