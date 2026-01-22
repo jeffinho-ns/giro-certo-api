@@ -22,6 +22,16 @@ export class AuthController {
       res.json(result);
     } catch (error: any) {
       console.error('Login error:', error);
+      console.error('Error stack:', error?.stack);
+      console.error('Error name:', error?.name);
+      
+      // Tratar AggregateError
+      if (error?.name === 'AggregateError' || error?.constructor?.name === 'AggregateError') {
+        const firstError = error?.errors?.[0] || error;
+        const errorMessage = firstError?.message || 'Erro de conexão com o banco de dados';
+        return res.status(401).json({ error: errorMessage });
+      }
+      
       const errorMessage = error?.message || error?.toString() || 'Email ou senha inválidos';
       res.status(401).json({ error: errorMessage });
     }
