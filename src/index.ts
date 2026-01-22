@@ -18,6 +18,11 @@ import imagesRoutes from './routes/images.routes';
 dotenv.config();
 
 const app = express();
+
+// Configurar CORS - precisa ser antes do Server do Socket.io
+const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:3000";
+const allowedOrigins = corsOrigin.split(',').map(origin => origin.trim());
+
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
@@ -27,10 +32,6 @@ const io = new Server(httpServer, {
 });
 
 const PORT = process.env.PORT || 3001;
-
-// Middlewares - Configurar CORS
-const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:3000";
-const allowedOrigins = corsOrigin.split(',').map(origin => origin.trim());
 
 app.use(cors({
   origin: (origin, callback) => {
