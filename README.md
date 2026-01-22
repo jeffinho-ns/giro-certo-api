@@ -1,99 +1,122 @@
-# 🏍️ Giro Certo API
+# Giro Certo API
 
-Back-end da plataforma Giro Certo - Ecossistema completo para motociclistas.
+Back-end API para o ecossistema Giro Certo - Sistema de delivery para motociclistas.
 
-## 🚀 Tecnologias
+## 🚀 Início Rápido
 
-- **Node.js** com **TypeScript**
-- **Express** - Framework web
-- **Prisma ORM** - ORM para PostgreSQL
-- **Socket.io** - WebSockets para rastreamento em tempo real
-- **PostgreSQL** - Banco de dados
+### 1. Instalar Dependências
 
-## 📋 Pré-requisitos
-
-- Node.js 18+
-- PostgreSQL 14+
-- npm ou yarn
-
-## 🔧 Instalação
-
-1. Instale as dependências:
 ```bash
-npm install
+yarn install
 ```
 
-2. Configure as variáveis de ambiente:
+### 2. Configurar Variáveis de Ambiente
+
+Copie o arquivo `.env.example` para `.env`:
+
 ```bash
 cp .env.example .env
-# Edite o arquivo .env com suas configurações
 ```
 
-3. Configure o banco de dados:
+O arquivo `.env` já está configurado com as credenciais do banco de dados.
+
+### 3. Configurar Banco de Dados
+
+Execute a migração para criar todas as tabelas:
+
 ```bash
-# Gere o Prisma Client
-npm run prisma:generate
-
-# Execute as migrações
-npm run prisma:migrate
+yarn db:setup
 ```
 
-4. Inicie o servidor em desenvolvimento:
+Ou:
+
 ```bash
-npm run dev
+node scripts/setup-db.js
 ```
 
-## 📁 Estrutura do Projeto
+### 4. Executar em Desenvolvimento
 
-```
-giro-certo-api/
-├── src/
-│   ├── controllers/    # Controllers das rotas
-│   ├── services/       # Lógica de negócio
-│   ├── routes/         # Definição de rotas
-│   ├── middleware/     # Middlewares customizados
-│   ├── utils/          # Utilitários
-│   └── types/          # Tipos TypeScript
-├── prisma/
-│   └── schema.prisma   # Schema do banco de dados
-└── dist/               # Build compilado
+```bash
+yarn dev
 ```
 
-## 🔑 Funcionalidades Principais
+A API estará disponível em `http://localhost:3001`
 
-- ✅ Sistema de Assinaturas (Standard/Premium)
-- ✅ Matching Algorithm para entregas
-- ✅ Rastreamento em Tempo Real via WebSocket
-- ✅ Sistema de Fidelidade (Pontos de fidelidade)
-- ✅ Gestão de Comissões (R$ 1,00 padrão / R$ 3,00 premium)
-- ✅ Mapa de Calor de Pedidos
-- ✅ Gestão de Manutenção de Motos
-- ✅ Sistema de Wallets
+## 📋 Scripts Disponíveis
 
-## 📝 Scripts Disponíveis
+- `yarn dev` - Executa em modo desenvolvimento com hot-reload
+- `yarn build` - Compila TypeScript para JavaScript
+- `yarn start` - Executa a aplicação em produção
+- `yarn db:setup` - Executa a migração do banco de dados
 
-- `npm run dev` - Inicia o servidor em modo desenvolvimento
-- `npm run build` - Compila o TypeScript
-- `npm run start` - Inicia o servidor em produção
-- `npm run prisma:generate` - Gera o Prisma Client
-- `npm run prisma:migrate` - Executa migrações do banco
-- `npm run prisma:studio` - Abre o Prisma Studio
+## 🗄️ Banco de Dados
 
-## 🔒 Variáveis de Ambiente
+O banco de dados PostgreSQL está hospedado no Render:
 
-```env
-DATABASE_URL="postgresql://user:password@localhost:5432/giro_certo"
-JWT_SECRET="your-secret-key"
-PORT=3001
-CORS_ORIGIN="http://localhost:3000"
+- **Host**: `dpg-d5oq5dpr0fns73afoq50-a.oregon-postgres.render.com`
+- **Database**: `ciro_certo_db`
+- **User**: `ciro_certo_db_user`
+
+A URL de conexão está configurada no arquivo `.env`.
+
+## 📚 Documentação
+
+- [SETUP.md](./SETUP.md) - Guia completo de configuração
+- [MIGRATION.md](./MIGRATION.md) - Documentação da migração do Prisma
+
+## 🔧 Tecnologias
+
+- **Node.js** + **TypeScript**
+- **Express** - Framework web
+- **PostgreSQL** - Banco de dados (driver `pg`)
+- **Socket.io** - WebSockets para tempo real
+- **JWT** - Autenticação
+- **bcryptjs** - Hash de senhas
+
+## 📝 Estrutura do Projeto
+
+```
+src/
+├── controllers/     # Controladores
+├── lib/            # Bibliotecas (db, etc)
+├── middleware/     # Middlewares (auth, error-handler)
+├── routes/         # Rotas da API
+├── services/       # Lógica de negócio
+├── types/          # Tipos TypeScript
+└── utils/          # Utilitários
 ```
 
-## 📡 WebSocket Events
+## 🔐 Variáveis de Ambiente
 
-- `rider:location` - Recebe localização do motociclista
-- `rider:location:update` - Broadcast de atualização de localização
-- `delivery:update` - Atualização de status de pedido
+| Variável | Descrição | Padrão |
+|----------|-----------|--------|
+| `DATABASE_URL` | URL de conexão PostgreSQL | - |
+| `JWT_SECRET` | Chave secreta para JWT | - |
+| `JWT_EXPIRES_IN` | Tempo de expiração do token | `7d` |
+| `PORT` | Porta do servidor | `3001` |
+| `NODE_ENV` | Ambiente (development/production) | `development` |
+| `CORS_ORIGIN` | Origem permitida para CORS | `http://localhost:3000` |
 
-## 📚 Documentação da API
+## ✅ Health Check
 
-Em desenvolvimento...
+Teste se a API está funcionando:
+
+```bash
+curl http://localhost:3001/health
+```
+
+Resposta esperada:
+```json
+{
+  "status": "ok",
+  "message": "Giro Certo API is running"
+}
+```
+
+## 📦 Deploy no Render
+
+1. Configure as variáveis de ambiente no painel do Render
+2. O build command é: `yarn install && yarn build`
+3. O start command é: `yarn start`
+
+Veja mais detalhes em [SETUP.md](./SETUP.md).

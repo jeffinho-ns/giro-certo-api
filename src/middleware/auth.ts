@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import prisma from '../lib/prisma';
+import { queryOne } from '../lib/db';
+import { User } from '../types';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
@@ -33,16 +34,11 @@ export async function authenticateToken(
 
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
     
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        isSubscriber: true,
-        subscriptionType: true,
-      },
-    });
+    const user = await queryOne<User>(
+      `SELECT id, name, email, "isSubscriber", "subscriptionType"
+       FROM "User" WHERE id = $1`,
+      [decoded.userId]
+    );
 
     if (!user) {
       return res.status(401).json({ error: 'Usuário não encontrado' });

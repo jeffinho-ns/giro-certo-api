@@ -1,6 +1,8 @@
 import { Router, Response } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
-import prisma from '../lib/prisma';
+import { query, queryOne, transaction } from '../lib/db';
+import { Wallet, TransactionType, TransactionStatus } from '../types';
+import { generateId } from '../utils/id';
 
 const router = Router();
 
@@ -11,15 +13,29 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const wallet = await prisma.wallet.findUnique({
-      where: { userId: req.userId },
-      include: {
-        transactions: {
-          orderBy: { createdAt: 'desc' },
-          take: 50,
-        },
-      },
-    });
+    const wallet = await queryOne<Wallet & { transactions: any[] }>(
+      `SELECT 
+        w.*,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', wt.id,
+              'type', wt.type,
+              'amount', wt.amount,
+              'description', wt.description,
+              'status', wt.status,
+              'createdAt', wt."createdAt"
+            ) ORDER BY wt."createdAt" DESC
+          ) FILTER (WHERE wt.id IS NOT NULL),
+          '[]'::json
+        ) as transactions
+       FROM "Wallet" w
+       LEFT JOIN "WalletTransaction" wt ON wt."walletId" = w.id
+       WHERE w."userId" = $1
+       GROUP BY w.id
+       LIMIT 50`,
+      [req.userId]
+    );
 
     if (!wallet) {
       return res.status(404).json({ error: 'Wallet não encontrada' });
@@ -44,10 +60,10 @@ router.post('/withdraw', authenticateToken, async (req: AuthRequest, res: Respon
       return res.status(400).json({ error: 'Valor inválido' });
     }
 
-    // Buscar wallet
-    const wallet = await prisma.wallet.findUnique({
-      where: { userId: req.userId },
-    });
+    const wallet = await queryOne<Wallet>(
+      'SELECT * FROM "Wallet" WHERE "userId" = $1',
+      [req.userId]
+    );
 
     if (!wallet) {
       return res.status(404).json({ error: 'Wallet não encontrada' });
@@ -57,25 +73,34 @@ router.post('/withdraw', authenticateToken, async (req: AuthRequest, res: Respon
       return res.status(400).json({ error: 'Saldo insuficiente' });
     }
 
-    // Criar transação de saque
-    const transaction = await prisma.walletTransaction.create({
-      data: {
-        walletId: wallet.id,
-        userId: req.userId,
-        type: 'WITHDRAWAL',
-        amount: amount,
-        description: `Solicitação de saque de R$ ${amount.toFixed(2)}`,
-        status: 'pending',
-      },
+    const transactionId = generateId();
+
+    await transaction(async (client) => {
+      await client.query(
+        `INSERT INTO "WalletTransaction" (
+          id, "walletId", "userId", type, amount, description, status, "createdAt"
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+        [
+          transactionId,
+          wallet.id,
+          req.userId,
+          TransactionType.WITHDRAWAL,
+          amount,
+          `Solicitação de saque de R$ ${amount.toFixed(2)}`,
+          TransactionStatus.pending,
+        ]
+      );
+
+      await client.query(
+        'UPDATE "Wallet" SET balance = balance - $1, "updatedAt" = NOW() WHERE id = $2',
+        [amount, wallet.id]
+      );
     });
 
-    // Atualizar saldo (bloquear o valor)
-    await prisma.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: { decrement: amount },
-      },
-    });
+    const transaction = await queryOne(
+      'SELECT * FROM "WalletTransaction" WHERE id = $1',
+      [transactionId]
+    );
 
     res.status(201).json({ transaction });
   } catch (error: any) {
@@ -90,20 +115,25 @@ router.get('/me/transactions', authenticateToken, async (req: AuthRequest, res: 
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const wallet = await prisma.wallet.findUnique({
-      where: { userId: req.userId },
-    });
+    const wallet = await queryOne<Wallet>(
+      'SELECT * FROM "Wallet" WHERE "userId" = $1',
+      [req.userId]
+    );
 
     if (!wallet) {
       return res.status(404).json({ error: 'Wallet não encontrada' });
     }
 
-    const transactions = await prisma.walletTransaction.findMany({
-      where: { walletId: wallet.id },
-      orderBy: { createdAt: 'desc' },
-      take: parseInt(req.query.limit as string) || 50,
-      skip: parseInt(req.query.offset as string) || 0,
-    });
+    const limit = parseInt(req.query.limit as string) || 50;
+    const offset = parseInt(req.query.offset as string) || 0;
+
+    const transactions = await query(
+      `SELECT * FROM "WalletTransaction" 
+       WHERE "walletId" = $1 
+       ORDER BY "createdAt" DESC 
+       LIMIT $2 OFFSET $3`,
+      [wallet.id, limit, offset]
+    );
 
     res.json({ transactions });
   } catch (error: any) {

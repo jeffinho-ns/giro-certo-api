@@ -1,7 +1,7 @@
-import prisma from '../lib/prisma';
-import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria } from '../types';
-import { DeliveryStatus } from '@prisma/client';
-import { findNearbyUsers, calculateDistance } from '../utils/haversine';
+import { query, queryOne, transaction } from '../lib/db';
+import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria, DeliveryStatus, DeliveryOrder, User, Partner, Wallet, TransactionType, TransactionStatus } from '../types';
+import { calculateDistance } from '../utils/haversine';
+import { generateId } from '../utils/id';
 
 export class DeliveryService {
   /**
@@ -10,38 +10,64 @@ export class DeliveryService {
    */
   async createOrder(data: CreateDeliveryOrderDto) {
     // Buscar loja/parceiro
-    const partner = await prisma.partner.findUnique({
-      where: { id: data.storeId },
-    });
+    const partner = await queryOne<Partner>(
+      'SELECT * FROM "Partner" WHERE id = $1',
+      [data.storeId]
+    );
 
     if (!partner) {
       throw new Error('Parceiro não encontrado');
     }
 
+    const orderId = generateId();
+    const status = DeliveryStatus.pending;
+    const priority = data.priority || 'normal';
+
     // Criar pedido
-    const order = await prisma.deliveryOrder.create({
-      data: {
-        storeId: data.storeId,
-        storeName: data.storeName,
-        storeAddress: data.storeAddress,
-        storeLatitude: data.storeLatitude,
-        storeLongitude: data.storeLongitude,
-        deliveryAddress: data.deliveryAddress,
-        deliveryLatitude: data.deliveryLatitude,
-        deliveryLongitude: data.deliveryLongitude,
-        recipientName: data.recipientName,
-        recipientPhone: data.recipientPhone,
-        notes: data.notes,
-        value: data.value,
-        deliveryFee: data.deliveryFee,
-        appCommission: 1.0, // Comissão padrão - será atualizada quando aceito
-        status: DeliveryStatus.pending,
-        priority: data.priority || 'normal',
-      },
-      include: {
-        partner: true,
-      },
-    });
+    await query(
+      `INSERT INTO "DeliveryOrder" (
+        id, "storeId", "storeName", "storeAddress", "storeLatitude", "storeLongitude",
+        "deliveryAddress", "deliveryLatitude", "deliveryLongitude",
+        "recipientName", "recipientPhone", notes, value, "deliveryFee",
+        "appCommission", status, priority, "createdAt", "updatedAt"
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())`,
+      [
+        orderId,
+        data.storeId,
+        data.storeName,
+        data.storeAddress,
+        data.storeLatitude,
+        data.storeLongitude,
+        data.deliveryAddress,
+        data.deliveryLatitude,
+        data.deliveryLongitude,
+        data.recipientName || null,
+        data.recipientPhone || null,
+        data.notes || null,
+        data.value,
+        data.deliveryFee,
+        1.0, // Comissão padrão - será atualizada quando aceito
+        status,
+        priority,
+      ]
+    );
+
+    // Buscar pedido criado com parceiro
+    const order = await queryOne<DeliveryOrder & { partner: Partner }>(
+      `SELECT do.*, 
+              json_build_object(
+                'id', p.id,
+                'name', p.name,
+                'type', p.type,
+                'address', p.address,
+                'latitude', p.latitude,
+                'longitude', p.longitude
+              ) as partner
+       FROM "DeliveryOrder" do
+       JOIN "Partner" p ON p.id = do."storeId"
+       WHERE do.id = $1`,
+      [orderId]
+    );
 
     return order;
   }
@@ -54,28 +80,21 @@ export class DeliveryService {
     const { latitude, longitude, radius = 5 } = criteria;
 
     // Buscar todos os motociclistas online
-    const riders = await prisma.user.findMany({
-      where: {
-        isOnline: true,
-        currentLat: { not: null },
-        currentLng: { not: null },
-      },
-      include: {
-        wallet: true,
-        deliveryOrders: {
-          where: {
-            status: {
-              in: [DeliveryStatus.accepted, DeliveryStatus.inProgress],
-            },
-          },
-        },
-        ratings: {
-          where: {
-            deliveryOrderId: { not: null },
-          },
-        },
-      },
-    });
+    const riders = await query<User & { wallet: Wallet; activeOrders: number; averageRating: number }>(
+      `SELECT 
+        u.*,
+        w.* as wallet,
+        COUNT(DISTINCT CASE WHEN do.status IN ('accepted', 'inProgress') THEN do.id END) as "activeOrders",
+        COALESCE(AVG(r.rating), 0) as "averageRating"
+       FROM "User" u
+       LEFT JOIN "Wallet" w ON w."userId" = u.id
+       LEFT JOIN "DeliveryOrder" do ON do."riderId" = u.id
+       LEFT JOIN "Rating" r ON r."userId" = u.id AND r."deliveryOrderId" IS NOT NULL
+       WHERE u."isOnline" = true 
+         AND u."currentLat" IS NOT NULL 
+         AND u."currentLng" IS NOT NULL
+       GROUP BY u.id, w.id`
+    );
 
     // Calcular distância e filtrar por raio
     const ridersWithDistance = riders
@@ -108,8 +127,8 @@ export class DeliveryService {
       }
 
       // 3. Reputação (maior média de avaliação primeiro)
-      const aRating = this.calculateAverageRating(a.rider.ratings);
-      const bRating = this.calculateAverageRating(b.rider.ratings);
+      const aRating = a.rider.averageRating || 0;
+      const bRating = b.rider.averageRating || 0;
       return bRating - aRating;
     });
 
@@ -119,17 +138,11 @@ export class DeliveryService {
       email: rider.email,
       distance: parseFloat(distance.toFixed(2)),
       isPremium: rider.isSubscriber && rider.subscriptionType === 'premium',
-      averageRating: this.calculateAverageRating(rider.ratings),
-      activeOrders: rider.deliveryOrders.length,
+      averageRating: rider.averageRating || 0,
+      activeOrders: rider.activeOrders || 0,
       currentLat: rider.currentLat,
       currentLng: rider.currentLng,
     }));
-  }
-
-  private calculateAverageRating(ratings: any[]): number {
-    if (ratings.length === 0) return 0;
-    const sum = ratings.reduce((acc, r) => acc + r.rating, 0);
-    return sum / ratings.length;
   }
 
   /**
@@ -138,9 +151,10 @@ export class DeliveryService {
    */
   async acceptOrder(orderId: string, riderId: string, riderName: string) {
     // Buscar pedido
-    const order = await prisma.deliveryOrder.findUnique({
-      where: { id: orderId },
-    });
+    const order = await queryOne<DeliveryOrder>(
+      'SELECT * FROM "DeliveryOrder" WHERE id = $1',
+      [orderId]
+    );
 
     if (!order) {
       throw new Error('Pedido não encontrado');
@@ -151,9 +165,10 @@ export class DeliveryService {
     }
 
     // Buscar motociclista
-    const rider = await prisma.user.findUnique({
-      where: { id: riderId },
-    });
+    const rider = await queryOne<User>(
+      'SELECT * FROM "User" WHERE id = $1',
+      [riderId]
+    );
 
     if (!rider) {
       throw new Error('Motociclista não encontrado');
@@ -172,18 +187,27 @@ export class DeliveryService {
     );
 
     // Atualizar pedido
-    const updatedOrder = await prisma.deliveryOrder.update({
-      where: { id: orderId },
-      data: {
-        status: DeliveryStatus.accepted,
-        riderId: riderId,
-        riderName: riderName,
-        appCommission: commission,
-        distance: parseFloat(distance.toFixed(2)),
-        estimatedTime: Math.round(distance * 3), // Estimativa: 3 min/km
-        acceptedAt: new Date(),
-      },
-    });
+    await query(
+      `UPDATE "DeliveryOrder" 
+       SET status = $1, "riderId" = $2, "riderName" = $3, 
+           "appCommission" = $4, distance = $5, 
+           "estimatedTime" = $6, "acceptedAt" = NOW(), "updatedAt" = NOW()
+       WHERE id = $7`,
+      [
+        DeliveryStatus.accepted,
+        riderId,
+        riderName,
+        commission,
+        parseFloat(distance.toFixed(2)),
+        Math.round(distance * 3), // Estimativa: 3 min/km
+        orderId,
+      ]
+    );
+
+    const updatedOrder = await queryOne<DeliveryOrder>(
+      'SELECT * FROM "DeliveryOrder" WHERE id = $1',
+      [orderId]
+    );
 
     return updatedOrder;
   }
@@ -192,43 +216,50 @@ export class DeliveryService {
    * Atualizar status do pedido
    */
   async updateOrderStatus(orderId: string, data: UpdateDeliveryStatusDto) {
-    const updateData: any = {
-      status: data.status,
-    };
+    const order = await queryOne<DeliveryOrder>(
+      'SELECT * FROM "DeliveryOrder" WHERE id = $1',
+      [orderId]
+    );
 
-    if (data.status === DeliveryStatus.inProgress && !data.riderId) {
-      updateData.inProgressAt = new Date();
+    if (!order) {
+      throw new Error('Pedido não encontrado');
+    }
+
+    let updateQuery = 'UPDATE "DeliveryOrder" SET status = $1, "updatedAt" = NOW()';
+    const params: any[] = [data.status];
+
+    if (data.status === DeliveryStatus.inProgress) {
+      updateQuery += ', "inProgressAt" = NOW()';
     }
 
     if (data.status === DeliveryStatus.completed) {
-      updateData.completedAt = new Date();
+      updateQuery += ', "completedAt" = NOW()';
 
       // Creditar comissão na wallet do motociclista
-      const order = await prisma.deliveryOrder.findUnique({
-        where: { id: orderId },
-      });
-
-      if (order && order.riderId && order.appCommission) {
+      if (order.riderId && order.appCommission) {
         await this.creditCommission(order.riderId, order.appCommission, orderId);
         
         // Adicionar pontos de fidelidade (10 pontos por corrida)
-        await prisma.user.update({
-          where: { id: order.riderId },
-          data: {
-            loyaltyPoints: { increment: 10 },
-          },
-        });
+        await query(
+          'UPDATE "User" SET "loyaltyPoints" = "loyaltyPoints" + 10, "updatedAt" = NOW() WHERE id = $1',
+          [order.riderId]
+        );
       }
     }
 
     if (data.status === DeliveryStatus.cancelled) {
-      updateData.cancelledAt = new Date();
+      updateQuery += ', "cancelledAt" = NOW()';
     }
 
-    const updatedOrder = await prisma.deliveryOrder.update({
-      where: { id: orderId },
-      data: updateData,
-    });
+    updateQuery += ' WHERE id = $' + (params.length + 1);
+    params.push(orderId);
+
+    await query(updateQuery, params);
+
+    const updatedOrder = await queryOne<DeliveryOrder>(
+      'SELECT * FROM "DeliveryOrder" WHERE id = $1',
+      [orderId]
+    );
 
     return updatedOrder;
   }
@@ -241,36 +272,42 @@ export class DeliveryService {
     amount: number,
     deliveryOrderId: string
   ) {
-    // Buscar wallet
-    const wallet = await prisma.wallet.findUnique({
-      where: { userId: riderId },
-    });
+    await transaction(async (client) => {
+      // Buscar wallet
+      const wallet = await client.query('SELECT * FROM "Wallet" WHERE "userId" = $1', [riderId]);
+      
+      if (wallet.rows.length === 0) {
+        throw new Error('Wallet não encontrada');
+      }
 
-    if (!wallet) {
-      throw new Error('Wallet não encontrada');
-    }
+      const walletData = wallet.rows[0];
+      const transactionId = generateId();
 
-    // Criar transação de comissão
-    await prisma.walletTransaction.create({
-      data: {
-        walletId: wallet.id,
-        userId: riderId,
-        type: 'COMMISSION',
-        amount: amount,
-        description: `Comissão da corrida #${deliveryOrderId.slice(0, 8)}`,
-        status: 'completed',
-        deliveryOrderId: deliveryOrderId,
-        completedAt: new Date(),
-      },
-    });
+      // Criar transação de comissão
+      await client.query(
+        `INSERT INTO "WalletTransaction" (
+          id, "walletId", "userId", type, amount, description, status,
+          "deliveryOrderId", "createdAt", "completedAt"
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
+        [
+          transactionId,
+          walletData.id,
+          riderId,
+          TransactionType.COMMISSION,
+          amount,
+          `Comissão da corrida #${deliveryOrderId.slice(0, 8)}`,
+          TransactionStatus.completed,
+          deliveryOrderId,
+        ]
+      );
 
-    // Atualizar saldo da wallet
-    await prisma.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: { increment: amount },
-        totalEarned: { increment: amount },
-      },
+      // Atualizar saldo da wallet
+      await client.query(
+        `UPDATE "Wallet" 
+         SET balance = balance + $1, "totalEarned" = "totalEarned" + $1, "updatedAt" = NOW()
+         WHERE id = $2`,
+        [amount, walletData.id]
+      );
     });
   }
 
@@ -284,39 +321,59 @@ export class DeliveryService {
     limit?: number;
     offset?: number;
   }) {
-    const where: any = {};
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
 
     if (filters?.status) {
-      where.status = filters.status;
+      whereClause += ` AND status = $${paramIndex}`;
+      params.push(filters.status);
+      paramIndex++;
     }
 
     if (filters?.riderId) {
-      where.riderId = filters.riderId;
+      whereClause += ` AND "riderId" = $${paramIndex}`;
+      params.push(filters.riderId);
+      paramIndex++;
     }
 
     if (filters?.storeId) {
-      where.storeId = filters.storeId;
+      whereClause += ` AND "storeId" = $${paramIndex}`;
+      params.push(filters.storeId);
+      paramIndex++;
     }
 
-    const [orders, total] = await Promise.all([
-      prisma.deliveryOrder.findMany({
-        where,
-        include: {
-          partner: true,
-          rider: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: filters?.limit || 50,
-        skip: filters?.offset || 0,
-      }),
-      prisma.deliveryOrder.count({ where }),
-    ]);
+    const limit = filters?.limit || 50;
+    const offset = filters?.offset || 0;
+
+    const orders = await query<DeliveryOrder & { partner: Partner; rider: Partial<User> }>(
+      `SELECT 
+        do.*,
+        json_build_object(
+          'id', p.id,
+          'name', p.name,
+          'type', p.type,
+          'address', p.address
+        ) as partner,
+        CASE 
+          WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', u.name, 'email', u.email)
+          ELSE NULL
+        END as rider
+       FROM "DeliveryOrder" do
+       LEFT JOIN "Partner" p ON p.id = do."storeId"
+       LEFT JOIN "User" u ON u.id = do."riderId"
+       ${whereClause}
+       ORDER BY do."createdAt" DESC
+       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    const totalResult = await queryOne<{ count: string }>(
+      `SELECT COUNT(*) as count FROM "DeliveryOrder" ${whereClause}`,
+      params
+    );
+
+    const total = totalResult ? parseInt(totalResult.count) : 0;
 
     return { orders, total };
   }
@@ -325,23 +382,41 @@ export class DeliveryService {
    * Buscar pedido por ID
    */
   async getOrderById(orderId: string) {
-    const order = await prisma.deliveryOrder.findUnique({
-      where: { id: orderId },
-      include: {
-        partner: true,
-        rider: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-        tracking: {
-          orderBy: { timestamp: 'desc' },
-          take: 10,
-        },
-      },
-    });
+    const order = await queryOne<DeliveryOrder & { partner: Partner; rider: Partial<User>; tracking: any[] }>(
+      `SELECT 
+        do.*,
+        json_build_object(
+          'id', p.id,
+          'name', p.name,
+          'type', p.type,
+          'address', p.address
+        ) as partner,
+        CASE 
+          WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', u.name, 'email', u.email)
+          ELSE NULL
+        END as rider,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', dt.id,
+              'latitude', dt.latitude,
+              'longitude', dt.longitude,
+              'heading', dt.heading,
+              'speed', dt.speed,
+              'timestamp', dt.timestamp
+            ) ORDER BY dt.timestamp DESC
+          ) FILTER (WHERE dt.id IS NOT NULL),
+          '[]'::json
+        ) as tracking
+       FROM "DeliveryOrder" do
+       LEFT JOIN "Partner" p ON p.id = do."storeId"
+       LEFT JOIN "User" u ON u.id = do."riderId"
+       LEFT JOIN "DeliveryTracking" dt ON dt."deliveryOrderId" = do.id
+       WHERE do.id = $1
+       GROUP BY do.id, p.id, u.id
+       LIMIT 10`,
+      [orderId]
+    );
 
     if (!order) {
       throw new Error('Pedido não encontrado');

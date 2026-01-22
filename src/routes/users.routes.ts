@@ -1,31 +1,20 @@
 import { Router, Request, Response } from 'express';
-import prisma from '../lib/prisma';
+import { query, queryOne } from '../lib/db';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
-import { UpdateUserLocationDto } from '../types';
+import { UpdateUserLocationDto, User, Bike, Wallet } from '../types';
 
 const router = Router();
 
 // Buscar todos os usuários (admin)
 router.get('/', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        age: true,
-        photoUrl: true,
-        pilotProfile: true,
-        isSubscriber: true,
-        subscriptionType: true,
-        loyaltyPoints: true,
-        currentLat: true,
-        currentLng: true,
-        isOnline: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const users = await query<User>(
+      `SELECT id, name, email, age, "photoUrl", "pilotProfile",
+              "isSubscriber", "subscriptionType", "loyaltyPoints",
+              "currentLat", "currentLng", "isOnline", "createdAt"
+       FROM "User"
+       ORDER BY "createdAt" DESC`
+    );
     res.json({ users });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -36,33 +25,40 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
 router.get('/:userId', authenticateToken, async (req: Request, res: Response) => {
   try {
     const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        age: true,
-        photoUrl: true,
-        pilotProfile: true,
-        isSubscriber: true,
-        subscriptionType: true,
-        loyaltyPoints: true,
-        currentLat: true,
-        currentLng: true,
-        isOnline: true,
-        createdAt: true,
-        bikes: true,
-        wallet: {
-          include: {
-            transactions: {
-              orderBy: { createdAt: 'desc' },
-              take: 10,
-            },
-          },
-        },
-      },
-    });
+    
+    const user = await queryOne<User & { bikes: Bike[]; wallet: Wallet & { transactions: any[] } }>(
+      `SELECT 
+        u.*,
+        COALESCE(
+          json_agg(DISTINCT jsonb_build_object(
+            'id', b.id,
+            'model', b.model,
+            'brand', b.brand,
+            'plate', b.plate
+          )) FILTER (WHERE b.id IS NOT NULL),
+          '[]'::json
+        ) as bikes,
+        json_build_object(
+          'id', w.id,
+          'userId', w."userId",
+          'balance', w.balance,
+          'totalEarned', w."totalEarned",
+          'totalWithdrawn', w."totalWithdrawn",
+          'transactions', COALESCE(
+            (SELECT json_agg(t.* ORDER BY t."createdAt" DESC) 
+             FROM "WalletTransaction" t 
+             WHERE t."walletId" = w.id 
+             LIMIT 10),
+            '[]'::json
+          )
+        ) as wallet
+       FROM "User" u
+       LEFT JOIN "Bike" b ON b."userId" = u.id
+       LEFT JOIN "Wallet" w ON w."userId" = u.id
+       WHERE u.id = $1
+       GROUP BY u.id, w.id`,
+      [userId]
+    );
 
     if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
@@ -81,60 +77,46 @@ router.get('/me/profile', authenticateToken, async (req: AuthRequest, res: Respo
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: req.userId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        age: true,
-        photoUrl: true,
-        pilotProfile: true,
-        isSubscriber: true,
-        subscriptionType: true,
-        loyaltyPoints: true,
-        currentLat: true,
-        currentLng: true,
-        isOnline: true,
-        bikes: {
-          include: {
-            maintenanceLogs: {
-              orderBy: { createdAt: 'desc' },
-              take: 5,
-            },
-          },
-        },
-        wallet: {
-          include: {
-            transactions: {
-              orderBy: { createdAt: 'desc' },
-              take: 20,
-            },
-          },
-        },
-        deliveryOrders: {
-          where: {
-            status: {
-              in: ['accepted', 'inProgress'],
-            },
-          },
-          take: 5,
-        },
-      },
-    });
+    const user = await queryOne<User & { bikes: Bike[]; wallet: Wallet }>(
+      `SELECT 
+        u.*,
+        COALESCE(
+          json_agg(DISTINCT jsonb_build_object(
+            'id', b.id,
+            'model', b.model,
+            'brand', b.brand,
+            'plate', b.plate,
+            'currentKm', b."currentKm"
+          )) FILTER (WHERE b.id IS NOT NULL),
+          '[]'::json
+        ) as bikes,
+        json_build_object(
+          'id', w.id,
+          'balance', w.balance,
+          'totalEarned', w."totalEarned",
+          'totalWithdrawn', w."totalWithdrawn"
+        ) as wallet
+       FROM "User" u
+       LEFT JOIN "Bike" b ON b."userId" = u.id
+       LEFT JOIN "Wallet" w ON w."userId" = u.id
+       WHERE u.id = $1
+       GROUP BY u.id, w.id`,
+      [req.userId]
+    );
 
     if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
-    res.json({ user });
+    const { password, ...userWithoutPassword } = user;
+    res.json({ user: userWithoutPassword });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
 // Atualizar localização do usuário
-router.patch('/me/location', authenticateToken, async (req: Request, res: Response) => {
+router.put('/me/location', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     if (!req.userId) {
       return res.status(401).json({ error: 'Não autenticado' });
@@ -142,90 +124,50 @@ router.patch('/me/location', authenticateToken, async (req: Request, res: Respon
 
     const data: UpdateUserLocationDto = req.body;
 
-    const user = await prisma.user.update({
-      where: { id: req.userId },
-      data: {
-        currentLat: data.latitude,
-        currentLng: data.longitude,
-        lastLocationUpdate: new Date(),
-        isOnline: data.isOnline !== undefined ? data.isOnline : true,
-      },
-      select: {
-        id: true,
-        name: true,
-        currentLat: true,
-        currentLng: true,
-        isOnline: true,
-        lastLocationUpdate: true,
-      },
-    });
+    await query(
+      `UPDATE "User" 
+       SET "currentLat" = $1, "currentLng" = $2, 
+           "lastLocationUpdate" = NOW(),
+           "isOnline" = COALESCE($3, "isOnline"),
+           "updatedAt" = NOW()
+       WHERE id = $4`,
+      [data.latitude, data.longitude, data.isOnline ?? true, req.userId]
+    );
 
-    res.json({ user });
+    res.json({ message: 'Localização atualizada com sucesso' });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
-// Listar assinantes Premium
-router.get('/subscribers/premium', authenticateToken, async (req: Request, res: Response) => {
+// Estatísticas do usuário
+router.get('/me/stats', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const subscribers = await prisma.user.findMany({
-      where: {
-        isSubscriber: true,
-        subscriptionType: 'premium',
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        loyaltyPoints: true,
-        isOnline: true,
-        currentLat: true,
-        currentLng: true,
-        createdAt: true,
-        deliveryOrders: {
-          where: {
-            status: 'completed',
-          },
-          select: {
-            id: true,
-            appCommission: true,
-            completedAt: true,
-          },
-        },
-        ratings: {
-          where: {
-            deliveryOrderId: { not: null },
-          },
-          select: {
-            rating: true,
-          },
-        },
-      },
-      orderBy: { loyaltyPoints: 'desc' },
-    });
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
 
-    // Calcular estatísticas adicionais
-    const subscribersWithStats = subscribers.map((sub) => {
-      const totalDeliveries = sub.deliveryOrders.length;
-      const totalEarnings = sub.deliveryOrders.reduce(
-        (sum, order) => sum + order.appCommission,
-        0
-      );
-      const averageRating =
-        sub.ratings.length > 0
-          ? sub.ratings.reduce((sum, r) => sum + r.rating, 0) / sub.ratings.length
-          : 0;
+    const stats = await queryOne<{
+      totalDeliveries: number;
+      completedDeliveries: number;
+      totalEarned: number;
+      averageRating: number;
+    }>(
+      `SELECT 
+        COUNT(DISTINCT do.id) as "totalDeliveries",
+        COUNT(DISTINCT CASE WHEN do.status = 'completed' THEN do.id END) as "completedDeliveries",
+        COALESCE(w."totalEarned", 0) as "totalEarned",
+        COALESCE(AVG(r.rating), 0) as "averageRating"
+       FROM "User" u
+       LEFT JOIN "DeliveryOrder" do ON do."riderId" = u.id
+       LEFT JOIN "Wallet" w ON w."userId" = u.id
+       LEFT JOIN "Rating" r ON r."userId" = u.id AND r."deliveryOrderId" IS NOT NULL
+       WHERE u.id = $1
+       GROUP BY w."totalEarned"`,
+      [req.userId]
+    );
 
-      return {
-        ...sub,
-        totalDeliveries,
-        totalEarnings,
-        averageRating: parseFloat(averageRating.toFixed(1)),
-      };
-    });
-
-    res.json({ subscribers: subscribersWithStats });
+    res.json({ stats });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
