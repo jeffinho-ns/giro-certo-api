@@ -184,7 +184,11 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
   } catch (error: any) {
     console.error('Error in /dashboard/orders:', error);
     console.error('Error stack:', error.stack);
-    console.error('Query params:', { limit, status, vehicleType });
+    console.error('Query params:', { 
+      limit: req.query.limit, 
+      status: req.query.status, 
+      vehicleType: req.query.vehicleType 
+    });
     res.status(400).json({ error: error.message || 'Erro ao buscar pedidos' });
   }
 });
