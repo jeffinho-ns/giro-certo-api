@@ -1,7 +1,7 @@
-import prisma from '@/lib/prisma';
-import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria } from '@/types';
+import prisma from '../lib/prisma';
+import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria } from '../types';
 import { DeliveryStatus } from '@prisma/client';
-import { findNearbyUsers, calculateDistance } from '@/utils/haversine';
+import { findNearbyUsers, calculateDistance } from '../utils/haversine';
 
 export class DeliveryService {
   /**

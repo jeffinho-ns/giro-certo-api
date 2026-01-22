@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { AuthService } from '@/services/auth.service';
-import { CreateUserDto, LoginDto } from '@/types';
+import { AuthService } from '../services/auth.service';
+import { CreateUserDto, LoginDto } from '../types';
 
 const authService = new AuthService();
 

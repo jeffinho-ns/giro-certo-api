@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { Request, Response } from 'express';
-import prisma from '@/lib/prisma';
-import { authenticateToken } from '@/middleware/auth';
+import prisma from '../lib/prisma';
+import { authenticateToken } from '../middleware/auth';
 import { Request, Response } from 'express';
-import { UpdateUserLocationDto } from '@/types';
+import { UpdateUserLocationDto } from '../types';
 
 const router = Router();
 

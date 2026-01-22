@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { DeliveryService } from '@/services/delivery.service';
-import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria } from '@/types';
+import { DeliveryService } from '../services/delivery.service';
+import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria } from '../types';
 
 const deliveryService = new DeliveryService();
 
