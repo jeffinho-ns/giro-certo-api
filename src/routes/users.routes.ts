@@ -1,15 +1,15 @@
 import { Router, Request, Response } from 'express';
 import { query, queryOne } from '../lib/db';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
-import { UpdateUserLocationDto, User, Bike, Wallet } from '../types';
+import { authenticateToken, AuthRequest, requireAdmin } from '../middleware/auth';
+import { UpdateUserLocationDto, User, Bike, Wallet, UserRole } from '../types';
 
 const router = Router();
 
-// Buscar todos os usuários (admin)
+// Buscar todos os usuários (admin/moderator)
 router.get('/', authenticateToken, async (req: Request, res: Response) => {
   try {
     const users = await query<User>(
-      `SELECT id, name, email, age, "photoUrl", "pilotProfile",
+      `SELECT id, name, email, age, "photoUrl", "pilotProfile", role,
               "isSubscriber", "subscriptionType", "loyaltyPoints",
               "currentLat", "currentLng", "isOnline", "createdAt"
        FROM "User"
@@ -168,6 +168,37 @@ router.get('/me/stats', authenticateToken, async (req: AuthRequest, res: Respons
     );
 
     res.json({ stats });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Atualizar role do usuário (apenas admin)
+router.put('/:userId/role', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+    const { role } = req.body;
+
+    if (!role || !Object.values(UserRole).includes(role)) {
+      return res.status(400).json({ error: 'Role inválido' });
+    }
+
+    // Não permitir que um admin remova seu próprio acesso de admin
+    if (req.userId === userId && role !== UserRole.ADMIN) {
+      return res.status(400).json({ error: 'Você não pode remover seu próprio acesso de administrador' });
+    }
+
+    await query(
+      `UPDATE "User" SET role = $1, "updatedAt" = NOW() WHERE id = $2`,
+      [role, userId]
+    );
+
+    const updatedUser = await queryOne<User>(
+      `SELECT id, name, email, role FROM "User" WHERE id = $1`,
+      [userId]
+    );
+
+    res.json({ message: 'Role atualizado com sucesso', user: updatedUser });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }

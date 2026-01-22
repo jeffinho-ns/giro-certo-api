@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { query, queryOne, transaction } from '../lib/db';
-import { CreateUserDto, LoginDto, User, PilotProfile } from '../types';
+import { CreateUserDto, LoginDto, User, PilotProfile, UserRole } from '../types';
 import { generateId } from '../utils/id';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -29,10 +29,10 @@ export class AuthService {
       // Criar usuário
       await client.query(
         `INSERT INTO "User" (
-          id, name, email, password, age, "photoUrl", "pilotProfile",
+          id, name, email, password, age, "photoUrl", "pilotProfile", role,
           "isSubscriber", "subscriptionType", "loyaltyPoints",
           "currentLat", "currentLng", "isOnline", "createdAt", "updatedAt"
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())`,
         [
           userId,
           data.name,
@@ -41,6 +41,7 @@ export class AuthService {
           data.age,
           data.photoUrl || null,
           pilotProfile,
+          UserRole.USER, // Todos os novos usuários começam como USER
           false,
           'standard',
           0,
@@ -60,7 +61,7 @@ export class AuthService {
 
     // Buscar usuário criado
     const user = await queryOne<User>(
-      `SELECT id, name, email, age, "photoUrl", "pilotProfile",
+      `SELECT id, name, email, age, "photoUrl", "pilotProfile", role,
               "isSubscriber", "subscriptionType", "loyaltyPoints"
        FROM "User" WHERE id = $1`,
       [userId]
@@ -73,7 +74,7 @@ export class AuthService {
     // Gerar token
     const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
     const token = jwt.sign(
-      { userId: user.id },
+      { userId: user.id, role: user.role },
       JWT_SECRET,
       { expiresIn } as SignOptions
     );
@@ -102,7 +103,7 @@ export class AuthService {
     // Gerar token
     const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
     const token = jwt.sign(
-      { userId: user.id },
+      { userId: user.id, role: user.role },
       JWT_SECRET,
       { expiresIn } as SignOptions
     );

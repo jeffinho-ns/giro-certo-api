@@ -9,7 +9,9 @@
     "start": "node dist/index.js",
     "db:setup": "node scripts/setup-db.js",
     "db:migrate": "node scripts/setup-db.js",
-    "db:images": "node scripts/setup-images.js"
+    "db:images": "node scripts/setup-images.js",
+    "db:add-role": "node scripts/add-user-role.js",
+    "create:admin": "node scripts/create-admin-user.js"
   },
   "keywords": [
     "api",

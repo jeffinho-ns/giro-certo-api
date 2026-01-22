@@ -67,6 +67,12 @@ export enum ImageEntityType {
   PROMOTION = 'promotion',
 }
 
+export enum UserRole {
+  USER = 'USER',
+  MODERATOR = 'MODERATOR',
+  ADMIN = 'ADMIN',
+}
+
 // Interfaces de Request
 export interface AuthRequest extends Express.Request {
   userId?: string;
@@ -155,6 +161,7 @@ export interface User {
   age: number;
   photoUrl: string | null;
   pilotProfile: PilotProfile;
+  role: UserRole;
   isSubscriber: boolean;
   subscriptionType: SubscriptionType;
   subscriptionExpiresAt: Date | null;
