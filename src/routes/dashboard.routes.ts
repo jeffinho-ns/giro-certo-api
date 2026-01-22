@@ -131,18 +131,18 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
     let paramIndex = 1;
 
     if (status) {
-      whereClause += ` AND do.status = $${paramIndex}`;
+      whereClause += ` AND "do".status = $${paramIndex}`;
       params.push(status);
       paramIndex++;
     }
 
     // Construir JOINs condicionais
-    let userJoinClause = 'LEFT JOIN "User" u ON u.id = do."riderId"';
+    let userJoinClause = 'LEFT JOIN "User" u ON u.id = "do"."riderId"';
     let bikeJoinClause = 'LEFT JOIN "Bike" b ON b."userId" = u.id';
     
     if (vehicleType) {
       // Se filtrar por tipo de veículo, precisa garantir que o rider tenha bike desse tipo
-      userJoinClause = 'INNER JOIN "User" u ON u.id = do."riderId"';
+      userJoinClause = 'INNER JOIN "User" u ON u.id = "do"."riderId"';
       bikeJoinClause = `INNER JOIN "Bike" b ON b."userId" = u.id AND b."vehicleType" = $${paramIndex}`;
       params.push(vehicleType);
       paramIndex++;
@@ -150,7 +150,7 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
 
     const orders = await query(
       `SELECT 
-        do.*, 
+        "do".*, 
         json_build_object('id', p.id, 'name', p.name) as partner,
         CASE 
           WHEN u.id IS NOT NULL THEN json_build_object(
@@ -170,12 +170,12 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
           )
           ELSE NULL
         END as bike
-       FROM "DeliveryOrder" do
-       LEFT JOIN "Partner" p ON p.id = do."storeId"
+       FROM "DeliveryOrder" "do"
+       LEFT JOIN "Partner" p ON p.id = "do"."storeId"
        ${userJoinClause}
        ${bikeJoinClause}
        ${whereClause}
-       ORDER BY do."createdAt" DESC
+       ORDER BY "do"."createdAt" DESC
        LIMIT $${paramIndex}`,
       [...params, limit]
     );
@@ -255,10 +255,10 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
           ),
           0
         )::numeric as "averageRating",
-        COUNT(DISTINCT CASE WHEN do.status IN ('accepted', 'inProgress') THEN do.id END) as "activeOrders"
+        COUNT(DISTINCT CASE WHEN "do".status IN ('accepted', 'inProgress') THEN "do".id END) as "activeOrders"
        FROM "User" u
        ${bikeJoinClause}
-       LEFT JOIN "DeliveryOrder" do ON do."riderId" = u.id AND do.status IN ('accepted', 'inProgress')
+       LEFT JOIN "DeliveryOrder" "do" ON "do"."riderId" = u.id AND "do".status IN ('accepted', 'inProgress')
        ${whereClause}
        GROUP BY u.id
        ORDER BY u."verificationBadge" DESC, u."isSubscriber" DESC, u."createdAt" DESC`,
