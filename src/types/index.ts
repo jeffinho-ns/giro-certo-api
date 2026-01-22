@@ -59,6 +59,14 @@ export enum TransactionStatus {
   cancelled = 'cancelled',
 }
 
+export enum ImageEntityType {
+  USER = 'user',
+  BIKE = 'bike',
+  PARTNER = 'partner',
+  POST = 'post',
+  PROMOTION = 'promotion',
+}
+
 // Interfaces de Request
 export interface AuthRequest extends Express.Request {
   userId?: string;
@@ -253,6 +261,19 @@ export interface Post {
   images: string[];
   likesCount: number;
   commentsCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Image {
+  id: string;
+  entityType: ImageEntityType;
+  entityId: string;
+  filename: string;
+  mimetype: string;
+  size: number;
+  data: Buffer;
+  isPrimary: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

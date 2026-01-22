@@ -13,6 +13,7 @@ import dashboardRoutes from './routes/dashboard.routes';
 import bikesRoutes from './routes/bikes.routes';
 import walletRoutes from './routes/wallet.routes';
 import postsRoutes from './routes/posts.routes';
+import imagesRoutes from './routes/images.routes';
 
 dotenv.config();
 
@@ -47,6 +48,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/bikes', bikesRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/posts', postsRoutes);
+app.use('/api/images', imagesRoutes);
 
 // Error handler
 app.use(errorHandler);
