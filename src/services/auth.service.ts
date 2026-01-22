@@ -112,18 +112,22 @@ export class AuthService {
         { expiresIn } as SignOptions
       );
 
-    // Atualizar status online
-    await query(
-      'UPDATE "User" SET "isOnline" = $1, "updatedAt" = NOW() WHERE id = $2',
-      [true, user.id]
-    );
+      // Atualizar status online
+      await query(
+        'UPDATE "User" SET "isOnline" = $1, "updatedAt" = NOW() WHERE id = $2',
+        [true, user.id]
+      );
 
-    const { password: _, ...userWithoutPassword } = user;
+      const { password: _, ...userWithoutPassword } = user;
 
-    return {
-      user: userWithoutPassword,
-      token,
-    };
+      return {
+        user: userWithoutPassword,
+        token,
+      };
+    } catch (error: any) {
+      console.error('Login service error:', error);
+      throw error;
+    }
   }
 
   async logout(userId: string) {
