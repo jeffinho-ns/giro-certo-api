@@ -1,10 +1,9 @@
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
+import jwt, { SignOptions } from 'jsonwebtoken';
 import prisma from '../lib/prisma';
 import { CreateUserDto, LoginDto } from '../types';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 export class AuthService {
   async register(data: CreateUserDto) {
@@ -27,7 +26,7 @@ export class AuthService {
         email: data.email,
         password: hashedPassword,
         age: data.age,
-        pilotProfile: data.pilotProfile || 'URBANO',
+        pilotProfile: (data.pilotProfile as any) || 'URBANO',
         photoUrl: data.photoUrl,
         // Criar wallet automaticamente
         wallet: {
@@ -52,9 +51,12 @@ export class AuthService {
     });
 
     // Gerar token
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-    });
+    const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
+    const token = jwt.sign(
+      { userId: user.id },
+      JWT_SECRET,
+      { expiresIn } as SignOptions
+    );
 
     return { user, token };
   }
@@ -77,9 +79,12 @@ export class AuthService {
     }
 
     // Gerar token
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-    });
+    const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
+    const token = jwt.sign(
+      { userId: user.id },
+      JWT_SECRET,
+      { expiresIn } as SignOptions
+    );
 
     // Atualizar status online
     await prisma.user.update({

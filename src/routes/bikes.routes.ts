@@ -60,7 +60,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 // Buscar moto por ID
 router.get('/:bikeId', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const { bikeId } = req.params;
+    const bikeId = Array.isArray(req.params.bikeId) ? req.params.bikeId[0] : req.params.bikeId;
 
     const bike = await prisma.bike.findUnique({
       where: { id: bikeId },
@@ -95,7 +95,7 @@ router.post('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, 
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const { bikeId } = req.params;
+    const bikeId = Array.isArray(req.params.bikeId) ? req.params.bikeId[0] : req.params.bikeId;
     const data: CreateMaintenanceLogDto = req.body;
 
     // Verificar se a moto pertence ao usuário
@@ -138,7 +138,7 @@ router.post('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, 
 // Listar logs de manutenção
 router.get('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const { bikeId } = req.params;
+    const bikeId = Array.isArray(req.params.bikeId) ? req.params.bikeId[0] : req.params.bikeId;
 
     const logs = await prisma.maintenanceLog.findMany({
       where: { bikeId },

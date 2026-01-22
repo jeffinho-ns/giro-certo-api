@@ -1,8 +1,6 @@
-import { Router } from 'express';
-import { Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
-import { authenticateToken } from '../middleware/auth';
-import { Request, Response } from 'express';
+import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { UpdateUserLocationDto } from '../types';
 
 const router = Router();
@@ -37,7 +35,7 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
 // Buscar usuário por ID
 router.get('/:userId', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params;
+    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {

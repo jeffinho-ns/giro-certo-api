@@ -89,7 +89,7 @@ router.post('/:postId/like', authenticateToken, async (req: AuthRequest, res: Re
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const { postId } = req.params;
+    const postId = Array.isArray(req.params.postId) ? req.params.postId[0] : req.params.postId;
 
     // Verificar se já curtiu
     const existingLike = await prisma.postLike.findUnique({
@@ -138,7 +138,7 @@ router.post('/:postId/comments', authenticateToken, async (req: AuthRequest, res
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const { postId } = req.params;
+    const postId = Array.isArray(req.params.postId) ? req.params.postId[0] : req.params.postId;
     const { content } = req.body;
 
     if (!content) {
@@ -210,7 +210,7 @@ router.delete('/:postId', authenticateToken, async (req: AuthRequest, res: Respo
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const { postId } = req.params;
+    const postId = Array.isArray(req.params.postId) ? req.params.postId[0] : req.params.postId;
 
     // TODO: Verificar se é admin ou se o post pertence ao usuário
     

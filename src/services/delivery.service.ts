@@ -334,7 +334,6 @@ export class DeliveryService {
             id: true,
             name: true,
             email: true,
-            phone: true,
           },
         },
         tracking: {

@@ -36,7 +36,7 @@ export class DeliveryController {
 
   async acceptOrder(req: Request, res: Response) {
     try {
-      const { orderId } = req.params;
+      const orderId = Array.isArray(req.params.orderId) ? req.params.orderId[0] : req.params.orderId;
       const { riderId, riderName } = req.body;
 
       if (!riderId || !riderName) {
@@ -52,7 +52,7 @@ export class DeliveryController {
 
   async updateOrderStatus(req: Request, res: Response) {
     try {
-      const { orderId } = req.params;
+      const orderId = Array.isArray(req.params.orderId) ? req.params.orderId[0] : req.params.orderId;
       const data: UpdateDeliveryStatusDto = req.body;
 
       const order = await deliveryService.updateOrderStatus(orderId, data);
@@ -81,7 +81,7 @@ export class DeliveryController {
 
   async getOrderById(req: Request, res: Response) {
     try {
-      const { orderId } = req.params;
+      const orderId = Array.isArray(req.params.orderId) ? req.params.orderId[0] : req.params.orderId;
       const order = await deliveryService.getOrderById(orderId);
       res.json(order);
     } catch (error: any) {
