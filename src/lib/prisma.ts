@@ -1,15 +1,9 @@
 import { PrismaClient } from '@prisma/client';
 
 const prismaClientSingleton = () => {
-  const config: any = {
+  return new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
-  };
-  
-  if (process.env.DATABASE_URL) {
-    config.datasourceUrl = process.env.DATABASE_URL;
-  }
-  
-  return new PrismaClient(config);
+  });
 };
 
 declare global {
