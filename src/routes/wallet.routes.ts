@@ -97,12 +97,12 @@ router.post('/withdraw', authenticateToken, async (req: AuthRequest, res: Respon
       );
     });
 
-    const transaction = await queryOne(
+    const walletTransaction = await queryOne(
       'SELECT * FROM "WalletTransaction" WHERE id = $1',
       [transactionId]
     );
 
-    res.status(201).json({ transaction });
+    res.status(201).json({ transaction: walletTransaction });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
