@@ -210,6 +210,7 @@ export interface User {
   photoUrl: string | null;
   pilotProfile: PilotProfile;
   role: UserRole;
+  partnerId: string | null; // ID do parceiro vinculado (para lojistas)
   isSubscriber: boolean;
   subscriptionType: SubscriptionType;
   subscriptionExpiresAt: Date | null;

@@ -9,45 +9,104 @@ import {
   PartnerPayment,
   PaymentStatus,
   PaymentPlanType,
+  UserRole,
 } from '../types';
 import { generateId } from '../utils/id';
+import bcrypt from 'bcryptjs';
 
 export class PartnerService {
   /**
-   * Criar um novo parceiro
+   * Criar um novo parceiro e usuário associado
    */
   async createPartner(data: CreatePartnerDto) {
     const partnerId = generateId();
+    const DEFAULT_PASSWORD = '@123mudar';
 
-    await query(
-      `INSERT INTO "Partner" (
-        id, name, type, address, latitude, longitude,
-        phone, email, specialties, "photoUrl",
-        cnpj, "companyName", "tradingName", "stateRegistration",
-        "maxServiceRadius", "avgPreparationTime", "operatingHours",
-        "isBlocked", "createdAt", "updatedAt"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())`,
-      [
-        partnerId,
-        data.name,
-        data.type,
-        data.address,
-        data.latitude,
-        data.longitude,
-        data.phone || null,
-        data.email || null,
-        data.specialties || [],
-        data.photoUrl || null,
-        data.cnpj || null,
-        data.companyName || null,
-        data.tradingName || null,
-        data.stateRegistration || null,
-        data.maxServiceRadius || null,
-        data.avgPreparationTime || null,
-        data.operatingHours ? JSON.stringify(data.operatingHours) : null,
-        false, // isBlocked
-      ]
-    );
+    // Verificar se o email já existe (se fornecido)
+    if (data.email) {
+      const existingUser = await queryOne<{ id: string }>(
+        'SELECT id FROM "User" WHERE email = $1',
+        [data.email]
+      );
+
+      if (existingUser) {
+        throw new Error('Email já cadastrado. Use um email diferente ou atualize o usuário existente.');
+      }
+    }
+
+    // Criar parceiro e usuário em uma transação
+    await transaction(async (client) => {
+      // 1. Criar parceiro
+      await client.query(
+        `INSERT INTO "Partner" (
+          id, name, type, address, latitude, longitude,
+          phone, email, specialties, "photoUrl",
+          cnpj, "companyName", "tradingName", "stateRegistration",
+          "maxServiceRadius", "avgPreparationTime", "operatingHours",
+          "isBlocked", "createdAt", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())`,
+        [
+          partnerId,
+          data.name,
+          data.type,
+          data.address,
+          data.latitude,
+          data.longitude,
+          data.phone || null,
+          data.email || null,
+          data.specialties || [],
+          data.photoUrl || null,
+          data.cnpj || null,
+          data.companyName || null,
+          data.tradingName || null,
+          data.stateRegistration || null,
+          data.maxServiceRadius || null,
+          data.avgPreparationTime || null,
+          data.operatingHours ? JSON.stringify(data.operatingHours) : null,
+          false, // isBlocked
+        ]
+      );
+
+      // 2. Criar usuário associado (se email fornecido)
+      if (data.email) {
+        const userId = generateId();
+        const walletId = generateId();
+        const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+
+        // Criar usuário
+        await client.query(
+          `INSERT INTO "User" (
+            id, name, email, password, age, "photoUrl", "pilotProfile", role, "partnerId",
+            "isSubscriber", "subscriptionType", "loyaltyPoints",
+            "currentLat", "currentLng", "isOnline", "createdAt", "updatedAt"
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())`,
+          [
+            userId,
+            data.name, // Nome do lojista
+            data.email,
+            hashedPassword,
+            25, // Idade padrão (pode ser ajustada)
+            data.photoUrl || null,
+            'URBANO', // PilotProfile padrão (não usado para lojistas)
+            UserRole.USER, // Role padrão
+            partnerId, // Vincular ao parceiro
+            false,
+            'standard',
+            0,
+            null,
+            null,
+            false,
+          ]
+        );
+
+        // Criar wallet para o usuário
+        await client.query(
+          `INSERT INTO "Wallet" (id, "userId", balance, "totalEarned", "totalWithdrawn", "createdAt", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
+          [walletId, userId, 0, 0, 0]
+        );
+      }
+    });
 
     const partner = await queryOne<Partner>(
       'SELECT * FROM "Partner" WHERE id = $1',
