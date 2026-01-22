@@ -183,7 +183,9 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
     res.json({ orders });
   } catch (error: any) {
     console.error('Error in /dashboard/orders:', error);
-    res.status(400).json({ error: error.message });
+    console.error('Error stack:', error.stack);
+    console.error('Query params:', { limit, status, vehicleType });
+    res.status(400).json({ error: error.message || 'Erro ao buscar pedidos' });
   }
 });
 
@@ -251,7 +253,7 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
         ) as "averageRating",
         COUNT(DISTINCT CASE WHEN do.status IN ('accepted', 'inProgress') THEN do.id END) as "activeOrders"
        FROM "User" u
-       ${bikeJoinClause}
+       ${bikeJoinClause ? bikeJoinClause + ' ' : ''}
        LEFT JOIN "DeliveryOrder" do ON do."riderId" = u.id AND do.status IN ('accepted', 'inProgress')
        ${whereClause}
        GROUP BY u.id
@@ -272,7 +274,9 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
 
     res.json({ riders: filteredRiders });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    console.error('Error in /dashboard/active-riders:', error);
+    console.error('Error stack:', error.stack);
+    res.status(400).json({ error: error.message || 'Erro ao buscar entregadores ativos' });
   }
 });
 
