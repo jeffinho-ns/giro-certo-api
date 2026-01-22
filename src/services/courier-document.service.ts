@@ -178,7 +178,35 @@ export class CourierDocumentService {
   /**
    * Listar todos os documentos pendentes de revisão (admin)
    */
-  async getPendingDocuments(limit = 50, offset = 0) {
+  async getPendingDocuments(
+    limit = 50, 
+    offset = 0, 
+    status?: string, 
+    documentType?: string
+  ) {
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    // Filtrar por status (padrão: UPLOADED se não especificado)
+    if (status && status !== 'all') {
+      whereClause += ` AND cd.status = $${paramIndex}`;
+      params.push(status);
+      paramIndex++;
+    } else {
+      // Por padrão, mostrar apenas documentos aguardando revisão
+      whereClause += ` AND cd.status = $${paramIndex}`;
+      params.push(DocumentStatus.UPLOADED);
+      paramIndex++;
+    }
+
+    // Filtrar por tipo de documento
+    if (documentType && documentType !== 'all') {
+      whereClause += ` AND cd."documentType" = $${paramIndex}`;
+      params.push(documentType);
+      paramIndex++;
+    }
+
     const documents = await query<CourierDocument & { user: Partial<User> }>(
       `SELECT 
         cd.*,
@@ -189,17 +217,17 @@ export class CourierDocumentService {
         ) as user
        FROM "CourierDocument" cd
        JOIN "User" u ON u.id = cd."userId"
-       WHERE cd.status = $1
+       ${whereClause}
        ORDER BY cd."createdAt" DESC
-       LIMIT $2 OFFSET $3`,
-      [DocumentStatus.UPLOADED, limit, offset]
+       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
     );
 
     const totalResult = await queryOne<{ count: string }>(
       `SELECT COUNT(*) as count 
-       FROM "CourierDocument" 
-       WHERE status = $1`,
-      [DocumentStatus.UPLOADED]
+       FROM "CourierDocument" cd
+       ${whereClause}`,
+      params
     );
 
     const total = totalResult ? parseInt(totalResult.count) : 0;

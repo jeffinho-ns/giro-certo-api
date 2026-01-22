@@ -74,8 +74,10 @@ router.get('/pending/review', authenticateToken, requireModerator, async (req: R
   try {
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
+    const status = req.query.status as string | undefined;
+    const documentType = req.query.documentType as string | undefined;
 
-    const result = await documentService.getPendingDocuments(limit, offset);
+    const result = await documentService.getPendingDocuments(limit, offset, status, documentType);
     res.json(result);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
