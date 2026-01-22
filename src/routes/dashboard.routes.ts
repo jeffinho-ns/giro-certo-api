@@ -249,15 +249,15 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
         ) as bike,
         COALESCE(
           (
-            SELECT AVG(r2.rating)
+            SELECT AVG(r2.rating::numeric)
             FROM "Rating" r2
             WHERE r2."userId" = u.id AND r2."deliveryOrderId" IS NOT NULL
           ),
           0
-        ) as "averageRating",
+        )::numeric as "averageRating",
         COUNT(DISTINCT CASE WHEN do.status IN ('accepted', 'inProgress') THEN do.id END) as "activeOrders"
        FROM "User" u
-       ${bikeJoinClause ? bikeJoinClause + ' ' : ''}
+       ${bikeJoinClause}
        LEFT JOIN "DeliveryOrder" do ON do."riderId" = u.id AND do.status IN ('accepted', 'inProgress')
        ${whereClause}
        GROUP BY u.id
