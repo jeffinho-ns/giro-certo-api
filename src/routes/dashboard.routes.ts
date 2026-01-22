@@ -136,13 +136,16 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
       paramIndex++;
     }
 
-    let bikeJoinClause = '';
+    // Construir JOINs condicionais
+    let userJoinClause = 'LEFT JOIN "User" u ON u.id = do."riderId"';
+    let bikeJoinClause = 'LEFT JOIN "Bike" b ON b."userId" = u.id';
+    
     if (vehicleType) {
+      // Se filtrar por tipo de veículo, precisa garantir que o rider tenha bike desse tipo
+      userJoinClause = 'INNER JOIN "User" u ON u.id = do."riderId"';
       bikeJoinClause = `INNER JOIN "Bike" b ON b."userId" = u.id AND b."vehicleType" = $${paramIndex}`;
       params.push(vehicleType);
       paramIndex++;
-    } else {
-      bikeJoinClause = `LEFT JOIN "Bike" b ON b."userId" = u.id`;
     }
 
     const orders = await query(
@@ -169,7 +172,7 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
         END as bike
        FROM "DeliveryOrder" do
        LEFT JOIN "Partner" p ON p.id = do."storeId"
-       LEFT JOIN "User" u ON u.id = do."riderId"
+       ${userJoinClause}
        ${bikeJoinClause}
        ${whereClause}
        ORDER BY do."createdAt" DESC
@@ -179,6 +182,7 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
 
     res.json({ orders });
   } catch (error: any) {
+    console.error('Error in /dashboard/orders:', error);
     res.status(400).json({ error: error.message });
   }
 });
@@ -197,7 +201,7 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
     let paramIndex = 1;
 
     // Se filtrar por tipo de veículo, precisa garantir que o usuário tenha bike
-    let bikeJoinClause = 'LEFT JOIN "Bike" b ON b."userId" = u.id';
+    let bikeJoinClause = '';
     if (vehicleType) {
       bikeJoinClause = `INNER JOIN "Bike" b ON b."userId" = u.id AND b."vehicleType" = $${paramIndex}`;
       params.push(vehicleType);
@@ -237,12 +241,18 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
           ),
           'null'::json
         ) as bike,
-        COALESCE(AVG(r.rating), 0) as "averageRating",
+        COALESCE(
+          (
+            SELECT AVG(r2.rating)
+            FROM "Rating" r2
+            WHERE r2."userId" = u.id AND r2."deliveryOrderId" IS NOT NULL
+          ),
+          0
+        ) as "averageRating",
         COUNT(DISTINCT CASE WHEN do.status IN ('accepted', 'inProgress') THEN do.id END) as "activeOrders"
        FROM "User" u
        ${bikeJoinClause}
-       LEFT JOIN "DeliveryOrder" do ON do."riderId" = u.id
-       LEFT JOIN "Rating" r ON r."userId" = u.id AND r."deliveryOrderId" IS NOT NULL
+       LEFT JOIN "DeliveryOrder" do ON do."riderId" = u.id AND do.status IN ('accepted', 'inProgress')
        ${whereClause}
        GROUP BY u.id
        ORDER BY u."verificationBadge" DESC, u."isSubscriber" DESC, u."createdAt" DESC`,
