@@ -21,16 +21,29 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+    origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
   }
 });
 
 const PORT = process.env.PORT || 3001;
 
-// Middlewares
+// Middlewares - Configurar CORS
+const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:3000";
+const allowedOrigins = corsOrigin.split(',').map(origin => origin.trim());
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+  origin: (origin, callback) => {
+    // Permitir requisições sem origin (mobile apps, Postman, etc)
+    if (!origin) return callback(null, true);
+    
+    // Verificar se a origin está na lista permitida
+    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
 app.use(express.json());
