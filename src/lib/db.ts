@@ -5,10 +5,10 @@ dotenv.config();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Render sempre requer SSL
-  ssl: {
+  // SSL apenas para conexões remotas (Render)
+  ssl: process.env.DATABASE_URL?.includes('render.com') ? {
     rejectUnauthorized: false
-  },
+  } : false,
 });
 
 // Helper para executar queries
