@@ -100,10 +100,13 @@ export class AuthService {
       throw new Error('Email ou senha inválidos');
     }
 
+    // Garantir que role existe (fallback para USER se não existir)
+    const userRole = user.role || UserRole.USER;
+
     // Gerar token
     const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
     const token = jwt.sign(
-      { userId: user.id, role: user.role },
+      { userId: user.id, role: userRole },
       JWT_SECRET,
       { expiresIn } as SignOptions
     );
