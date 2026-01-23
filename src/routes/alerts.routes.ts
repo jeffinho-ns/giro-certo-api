@@ -5,7 +5,36 @@ import { authenticateToken, AuthRequest, requireModerator } from '../middleware/
 const router = Router();
 const alertService = new AlertService();
 
-// Listar alertas
+// Listar alertas do usuário logado (para usuários comuns)
+router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+    const partnerId = req.user?.partnerId;
+    
+    const filters: any = {
+      limit: req.query.limit ? parseInt(req.query.limit as string) : 50,
+      offset: req.query.offset ? parseInt(req.query.offset as string) : 0,
+    };
+
+    // Filtrar por userId ou partnerId do usuário logado
+    if (partnerId) {
+      filters.partnerId = partnerId;
+    } else if (userId) {
+      filters.userId = userId;
+    }
+
+    if (req.query.isRead !== undefined) {
+      filters.isRead = req.query.isRead === 'true';
+    }
+
+    const result = await alertService.listAlerts(filters);
+    res.json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Listar alertas (apenas moderadores/admin)
 router.get('/', authenticateToken, requireModerator, async (req: Request, res: Response) => {
   try {
     const filters = {
@@ -45,25 +74,51 @@ router.get('/:alertId', authenticateToken, requireModerator, async (req: Request
   }
 });
 
-// Marcar alerta como lido
-router.put('/:alertId/read', authenticateToken, requireModerator, async (req: Request, res: Response) => {
+// Marcar alerta como lido (usuário comum pode marcar seus próprios alertas)
+router.put('/:alertId/read', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const alertId = Array.isArray(req.params.alertId)
       ? req.params.alertId[0]
       : req.params.alertId;
 
-    const alert = await alertService.markAsRead(alertId);
-    res.json({ alert });
+    // Verificar se o alerta pertence ao usuário (se não for admin/moderator)
+    if (req.user?.role !== 'ADMIN' && req.user?.role !== 'MODERATOR') {
+      const alert = await alertService.getAlertById(alertId);
+      if (!alert) {
+        return res.status(404).json({ error: 'Alerta não encontrado' });
+      }
+      
+      // Verificar se o alerta pertence ao usuário ou parceiro
+      const userId = req.userId;
+      const partnerId = req.user?.partnerId;
+      
+      if (alert.userId !== userId && alert.partnerId !== partnerId) {
+        return res.status(403).json({ error: 'Você não tem permissão para marcar este alerta como lido' });
+      }
+    }
+
+    const updatedAlert = await alertService.markAsRead(alertId);
+    res.json({ alert: updatedAlert });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
-// Marcar todos como lidos
-router.put('/read-all', authenticateToken, requireModerator, async (req: AuthRequest, res: Response) => {
+// Marcar todos como lidos (usuário comum pode marcar seus próprios alertas)
+router.put('/read-all', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.query.userId as string | undefined;
-    const partnerId = req.query.partnerId as string | undefined;
+    let userId: string | undefined;
+    let partnerId: string | undefined;
+
+    // Se não for admin/moderator, usar apenas os alertas do próprio usuário
+    if (req.user?.role !== 'ADMIN' && req.user?.role !== 'MODERATOR') {
+      userId = req.userId;
+      partnerId = req.user?.partnerId;
+    } else {
+      // Admin/moderator pode especificar userId ou partnerId
+      userId = req.query.userId as string | undefined;
+      partnerId = req.query.partnerId as string | undefined;
+    }
 
     const count = await alertService.markAllAsRead(userId, partnerId);
     res.json({ message: `${count} alertas marcados como lidos` });

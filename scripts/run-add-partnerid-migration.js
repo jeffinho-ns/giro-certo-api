@@ -3,9 +3,24 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
-const pool = new Pool({
+// Configurar pool com SSL se necessário (para produção)
+const connectionConfig = {
   connectionString: process.env.DATABASE_URL,
-});
+};
+
+// Se a URL contém SSL, adicionar configuração SSL
+if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=require')) {
+  connectionConfig.ssl = {
+    rejectUnauthorized: false
+  };
+} else if (process.env.DATABASE_URL && (process.env.DATABASE_URL.includes('render.com') || process.env.DATABASE_URL.includes('onrender.com'))) {
+  // Render requer SSL
+  connectionConfig.ssl = {
+    rejectUnauthorized: false
+  };
+}
+
+const pool = new Pool(connectionConfig);
 
 async function runMigration() {
   const client = await pool.connect();

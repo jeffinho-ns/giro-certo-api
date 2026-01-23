@@ -133,6 +133,13 @@ export class AlertService {
   }
 
   /**
+   * Buscar alerta por ID
+   */
+  async getAlertById(alertId: string): Promise<Alert | null> {
+    return await queryOne<Alert>('SELECT * FROM "Alert" WHERE id = $1', [alertId]);
+  }
+
+  /**
    * Marcar alerta como lido
    */
   async markAsRead(alertId: string): Promise<Alert> {
