@@ -59,7 +59,7 @@ export class DeliveryService {
 
     // Buscar pedido criado com parceiro
     const order = await queryOne<DeliveryOrder & { partner: Partner }>(
-      `SELECT do.*, 
+      `SELECT ord.*, 
               json_build_object(
                 'id', p.id,
                 'name', p.name,
@@ -68,9 +68,9 @@ export class DeliveryService {
                 'latitude', p.latitude,
                 'longitude', p.longitude
               ) as partner
-       FROM "DeliveryOrder" do
-       JOIN "Partner" p ON p.id = do."storeId"
-       WHERE do.id = $1`,
+       FROM "DeliveryOrder" ord
+       JOIN "Partner" p ON p.id = ord."storeId"
+       WHERE ord.id = $1`,
       [orderId]
     );
 
@@ -490,7 +490,7 @@ export class DeliveryService {
 
     const orders = await query<DeliveryOrder & { partner: Partner; rider: Partial<User> }>(
       `SELECT 
-        do.*,
+        ord.*,
         json_build_object(
           'id', p.id,
           'name', p.name,
@@ -501,17 +501,17 @@ export class DeliveryService {
           WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', u.name, 'email', u.email)
           ELSE NULL
         END as rider
-       FROM "DeliveryOrder" do
-       LEFT JOIN "Partner" p ON p.id = do."storeId"
-       LEFT JOIN "User" u ON u.id = do."riderId"
+       FROM "DeliveryOrder" ord
+       LEFT JOIN "Partner" p ON p.id = ord."storeId"
+       LEFT JOIN "User" u ON u.id = ord."riderId"
        ${whereClause}
-       ORDER BY do."createdAt" DESC
+       ORDER BY ord."createdAt" DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, limit, offset]
     );
 
     const totalResult = await queryOne<{ count: string }>(
-      `SELECT COUNT(*) as count FROM "DeliveryOrder" ${whereClause}`,
+      `SELECT COUNT(*) as count FROM "DeliveryOrder" ord ${whereClause}`,
       params
     );
 
@@ -526,7 +526,7 @@ export class DeliveryService {
   async getOrderById(orderId: string) {
     const order = await queryOne<DeliveryOrder & { partner: Partner; rider: Partial<User>; tracking: any[] }>(
       `SELECT 
-        do.*,
+        ord.*,
         json_build_object(
           'id', p.id,
           'name', p.name,
@@ -550,12 +550,12 @@ export class DeliveryService {
           ) FILTER (WHERE dt.id IS NOT NULL),
           '[]'::json
         ) as tracking
-       FROM "DeliveryOrder" do
-       LEFT JOIN "Partner" p ON p.id = do."storeId"
-       LEFT JOIN "User" u ON u.id = do."riderId"
-       LEFT JOIN "DeliveryTracking" dt ON dt."deliveryOrderId" = do.id
-       WHERE do.id = $1
-       GROUP BY do.id, p.id, u.id
+       FROM "DeliveryOrder" ord
+       LEFT JOIN "Partner" p ON p.id = ord."storeId"
+       LEFT JOIN "User" u ON u.id = ord."riderId"
+       LEFT JOIN "DeliveryTracking" dt ON dt."deliveryOrderId" = ord.id
+       WHERE ord.id = $1
+       GROUP BY ord.id, p.id, u.id
        LIMIT 10`,
       [orderId]
     );

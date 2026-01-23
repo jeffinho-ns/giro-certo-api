@@ -9,7 +9,9 @@ export class DeliveryController {
     try {
       const data: CreateDeliveryOrderDto = req.body;
       const order = await deliveryService.createOrder(data);
-      res.status(201).json(order);
+      // Retornar apenas campos do pedido (sem partner) para compatibilidade com clientes
+      const { partner: _p, ...orderPlain } = order as any;
+      res.status(201).json(orderPlain);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
