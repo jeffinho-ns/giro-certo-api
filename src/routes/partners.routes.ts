@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { PartnerService } from '../services/partner.service';
 import { authenticateToken, AuthRequest, requireAdmin, requireModerator } from '../middleware/auth';
+import { queryOne } from '../lib/db';
 import {
   CreatePartnerDto,
   UpdatePartnerDto,
@@ -25,6 +26,35 @@ router.get('/', authenticateToken, requireModerator, async (req: Request, res: R
 
     const result = await partnerService.listPartners(filters);
     res.json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Buscar própria loja (para lojistas)
+router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+
+    // Buscar usuário para obter partnerId
+    const user = await queryOne<{ partnerId: string | null }>(
+      'SELECT "partnerId" FROM "User" WHERE id = $1',
+      [req.userId]
+    );
+
+    if (!user || !user.partnerId) {
+      return res.status(404).json({ error: 'Você não está vinculado a nenhuma loja' });
+    }
+
+    const partner = await partnerService.getPartnerById(user.partnerId);
+
+    if (!partner) {
+      return res.status(404).json({ error: 'Loja não encontrada' });
+    }
+
+    res.json({ partner });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
