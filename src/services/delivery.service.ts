@@ -34,8 +34,8 @@ export class DeliveryService {
         id, "storeId", "storeName", "storeAddress", "storeLatitude", "storeLongitude",
         "deliveryAddress", "deliveryLatitude", "deliveryLongitude",
         "recipientName", "recipientPhone", notes, value, "deliveryFee",
-        "appCommission", status, priority, "createdAt", "updatedAt"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())`,
+        "appCommission", status, priority, "createdAt"
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())`,
       [
         orderId,
         data.storeId,
@@ -333,7 +333,7 @@ export class DeliveryService {
       `UPDATE "DeliveryOrder" 
        SET status = $1, "riderId" = $2, "riderName" = $3, 
            "appCommission" = $4, distance = $5, 
-           "estimatedTime" = $6, "acceptedAt" = NOW(), "updatedAt" = NOW()
+           "estimatedTime" = $6, "acceptedAt" = NOW()
        WHERE id = $7`,
       [
         DeliveryStatus.accepted,
@@ -367,7 +367,7 @@ export class DeliveryService {
       throw new Error('Pedido não encontrado');
     }
 
-    let updateQuery = 'UPDATE "DeliveryOrder" SET status = $1, "updatedAt" = NOW()';
+    let updateQuery = 'UPDATE "DeliveryOrder" SET status = $1';
     const params: any[] = [data.status];
 
     if (data.status === DeliveryStatus.inProgress) {
