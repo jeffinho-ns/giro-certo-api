@@ -142,10 +142,18 @@ curl -X PUT https://YOUR_API_URL/api/users/me/location \
   }'
 ```
 
-## 🛒 9. Criar Pedido de Delivery
+## 🛒 9. Listar Pedidos de Delivery
 
 ```bash
-curl -X POST https://YOUR_API_URL/api/delivery/orders \
+# Todos (ou com filtros: ?status=pending&storeId=XXX&limit=50)
+curl "https://YOUR_API_URL/api/delivery?limit=50" \
+  -H "Authorization: Bearer SEU_TOKEN_AQUI"
+```
+
+## 🛒 10. Criar Pedido de Delivery
+
+```bash
+curl -X POST https://YOUR_API_URL/api/delivery \
   -H "Authorization: Bearer SEU_TOKEN_AQUI" \
   -H "Content-Type: application/json" \
   -d '{
