@@ -1,4 +1,4 @@
-import multer, { Multer, StorageEngine } from 'multer';
+import multer, { StorageEngine } from 'multer';
 import path from 'path';
 import fs from 'fs';
 
@@ -21,7 +21,7 @@ const storage: StorageEngine = multer.diskStorage({
 });
 
 // Filtro de arquivo
-const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+const fileFilter = (req: any, file: any, cb: multer.FileFilterCallback) => {
   // Permitir apenas imagens
   const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
   
@@ -33,7 +33,7 @@ const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCa
 };
 
 // Configurar multer
-export const upload: Multer = multer({
+export const upload = multer({
   storage,
   fileFilter,
   limits: {

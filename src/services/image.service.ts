@@ -9,7 +9,7 @@ export class ImageService {
   async uploadImage(
     entityType: ImageEntityType,
     entityId: string,
-    file: Express.Multer.File,
+    file: any,
     isPrimary: boolean = false
   ): Promise<Image> {
     const imageId = generateId();

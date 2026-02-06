@@ -30,7 +30,8 @@ router.post(
   upload.single('image'),
   async (req: AuthRequest, res: Response) => {
     try {
-      if (!req.file) {
+      const file = (req as any).file;
+      if (!file) {
         return res.status(400).json({ error: 'Nenhuma imagem fornecida' });
       }
 
@@ -48,7 +49,7 @@ router.post(
         return res.status(403).json({ error: 'Sem permissão para fazer upload' });
       }
 
-      const image = await imageService.uploadImage(entityType, entityId, req.file, isPrimary);
+      const image = await imageService.uploadImage(entityType, entityId, file, isPrimary);
 
       res.status(201).json({
         image: {
