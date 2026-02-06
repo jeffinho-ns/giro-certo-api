@@ -562,7 +562,6 @@ export interface DeliveryRegistration {
 
 export interface CreateDeliveryRegistrationDto {
   documentId: string;
-  equipments: string[];
   plateLicense: string;
   currentKilometers: number;
   lastOilChangeDate?: Date;
