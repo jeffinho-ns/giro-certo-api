@@ -54,7 +54,9 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json());
+// Aumentar limites para aceitar payloads grandes (ex: imagens em base64)
+app.use(express.json({ limit: process.env.JSON_PAYLOAD_LIMIT || '50mb' }));
+app.use(express.urlencoded({ limit: process.env.JSON_PAYLOAD_LIMIT || '50mb', extended: true }));
 app.use('/uploads', express.static('uploads'));
 
 // Health check
