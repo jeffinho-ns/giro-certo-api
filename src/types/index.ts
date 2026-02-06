@@ -104,6 +104,13 @@ export enum TransactionStatus {
   cancelled = 'cancelled',
 }
 
+export enum DeliveryRegistrationStatus {
+  PENDING = 'PENDING',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+}
+
 export enum ImageEntityType {
   USER = 'user',
   BIKE = 'bike',
@@ -523,4 +530,62 @@ export interface CreateDisputeDto {
 export interface ResolveDisputeDto {
   resolution: string;
   status?: DisputeStatus; // RESOLVED ou CLOSED
+}
+
+// ============================================
+// Tipos para DeliveryRegistration
+// ============================================
+
+export interface DeliveryRegistration {
+  id: string;
+  userId: string;
+  status: DeliveryRegistrationStatus;
+  cpfCnh: string;
+  selfieWithDocUrl: string | null;
+  motoWithPlateUrl: string | null;
+  platePlateCloseupUrl: string | null;
+  cnhPhotoUrl: string | null;
+  crlvPhotoUrl: string | null;
+  plateLicense: string;
+  currentKilometers: number;
+  lastOilChangeDate: Date | null;
+  lastOilChangeKm: number | null;
+  emergencyPhone: string | null;
+  consentImages: boolean;
+  approvedAt: Date | null;
+  approvedBy: string | null;
+  rejectionReason: string | null;
+  adminNotes: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateDeliveryRegistrationDto {
+  documentId: string;
+  equipments: string[];
+  plateLicense: string;
+  currentKilometers: number;
+  lastOilChangeDate?: Date;
+  lastOilChangeKm?: number;
+  emergencyPhone?: string;
+  consentImages: boolean;
+  // Imagens em base64
+  selfieWithDocBase64?: string;
+  motoWithPlateBase64?: string;
+  platePlateCloseupBase64?: string;
+  cnhPhotoBase64?: string;
+  crlvPhotoBase64?: string;
+  // Ou como buffer (para processamento interno)
+  selfieWithDocData?: Buffer;
+  motoWithPlateData?: Buffer;
+  platePlateCloseupData?: Buffer;
+  cnhPhotoData?: Buffer;
+  crlvPhotoData?: Buffer;
+}
+
+export interface UpdateDeliveryRegistrationStatusDto {
+  status: DeliveryRegistrationStatus;
+  approvedBy?: string;
+  rejectionReason?: string;
+  adminNotes?: string;
 }

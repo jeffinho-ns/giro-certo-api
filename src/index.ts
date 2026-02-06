@@ -15,6 +15,7 @@ import walletRoutes from './routes/wallet.routes';
 import postsRoutes from './routes/posts.routes';
 import imagesRoutes from './routes/images.routes';
 import courierDocumentsRoutes from './routes/courier-documents.routes';
+import deliveryRegistrationRoutes from './routes/delivery-registration.routes';
 import verificationSelfiesRoutes from './routes/verification-selfies.routes';
 import partnersRoutes from './routes/partners.routes';
 import disputesRoutes from './routes/disputes.routes';
@@ -54,6 +55,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+app.use('/uploads', express.static('uploads'));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -70,6 +72,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/posts', postsRoutes);
 app.use('/api/images', imagesRoutes);
 app.use('/api/courier-documents', courierDocumentsRoutes);
+app.use('/api/delivery-registration', deliveryRegistrationRoutes);
 app.use('/api/verification-selfies', verificationSelfiesRoutes);
 app.use('/api/partners', partnersRoutes);
 app.use('/api/disputes', disputesRoutes);

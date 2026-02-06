@@ -1,0 +1,252 @@
+import { query, queryOne, transaction } from '../lib/db';
+import {
+  CreateDeliveryRegistrationDto,
+  UpdateDeliveryRegistrationStatusDto,
+  DeliveryRegistration,
+  DeliveryRegistrationStatus,
+  User,
+} from '../types';
+import { generateId } from '../utils/id';
+
+// Helper para converter buffer em base64
+function bufferToBase64(buffer: Buffer | null | undefined): string | null {
+  if (!buffer) return null;
+  if (typeof buffer === 'string') return buffer; // Já é string
+  return Buffer.isBuffer(buffer) ? buffer.toString('base64') : null;
+}
+
+export class DeliveryRegistrationService {
+  /**
+   * Criar um novo registro de delivery (entregador)
+   */
+  async createRegistration(
+    userId: string,
+    data: CreateDeliveryRegistrationDto
+  ) {
+    // Verificar se o usuário existe
+    const user = await queryOne<User>(
+      'SELECT id FROM "User" WHERE id = $1',
+      [userId]
+    );
+
+    if (!user) {
+      throw new Error('Usuário não encontrado');
+    }
+
+    const registrationId = generateId();
+    const lastOilChangeDate = data.lastOilChangeDate || null;
+    const lastOilChangeKm = data.lastOilChangeKm || null;
+
+    await query(
+      `INSERT INTO "DeliveryRegistration" (
+        id, "userId", status, "cpfCnh", "selfieWithDocData", 
+        "motoWithPlateData", "platePlateCloseupData", "cnhPhotoData", 
+        "crlvPhotoData", "plateLicense", "currentKilometers", 
+        "lastOilChangeDate", "lastOilChangeKm", "emergencyPhone", 
+        "consentImages", "createdAt", "updatedAt"
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())`,
+      [
+        registrationId,
+        userId,
+        DeliveryRegistrationStatus.PENDING,
+        data.documentId,
+        data.selfieWithDocData || null,
+        data.motoWithPlateData || null,
+        data.platePlateCloseupData || null,
+        data.cnhPhotoData || null,
+        data.crlvPhotoData || null,
+        data.plateLicense,
+        data.currentKilometers,
+        lastOilChangeDate,
+        lastOilChangeKm,
+        data.emergencyPhone || null,
+        data.consentImages,
+      ]
+    );
+
+    const registration = await queryOne<any>(
+      'SELECT * FROM "DeliveryRegistration" WHERE id = $1',
+      [registrationId]
+    );
+
+    if (!registration) {
+      throw new Error('Erro ao criar registro de delivery');
+    }
+
+    // Converter imagens em base64
+    return {
+      ...registration,
+      selfieWithDocData: bufferToBase64(registration.selfieWithDocData),
+      motoWithPlateData: bufferToBase64(registration.motoWithPlateData),
+      platePlateCloseupData: bufferToBase64(registration.platePlateCloseupData),
+      cnhPhotoData: bufferToBase64(registration.cnhPhotoData),
+      crlvPhotoData: bufferToBase64(registration.crlvPhotoData),
+    };
+  }
+
+  /**
+   * Buscar registro por ID com dados do usuário
+   */
+  async getRegistrationById(registrationId: string) {
+    const registration = await queryOne<any>(
+      `SELECT dr.*, 
+              json_build_object(
+                'id', u.id,
+                'name', u.name,
+                'email', u.email
+              ) as user
+       FROM "DeliveryRegistration" dr
+       JOIN "User" u ON u.id = dr."userId"
+       WHERE dr.id = $1`,
+      [registrationId]
+    );
+
+    if (!registration) return null;
+
+    // Converter imagens em base64
+    return {
+      ...registration,
+      selfieWithDocData: bufferToBase64(registration.selfieWithDocData),
+      motoWithPlateData: bufferToBase64(registration.motoWithPlateData),
+      platePlateCloseupData: bufferToBase64(registration.platePlateCloseupData),
+      cnhPhotoData: bufferToBase64(registration.cnhPhotoData),
+      crlvPhotoData: bufferToBase64(registration.crlvPhotoData),
+    };
+  }
+
+  /**
+   * Listar registros de um usuário
+   */
+  async getRegistrationsByUserId(userId: string) {
+    const registrations = await query<any>(
+      `SELECT * FROM "DeliveryRegistration" 
+       WHERE "userId" = $1 
+       ORDER BY "createdAt" DESC`,
+      [userId]
+    );
+
+    // Converter imagens em base64
+    return registrations.map((reg) => ({
+      ...reg,
+      selfieWithDocData: bufferToBase64(reg.selfieWithDocData),
+      motoWithPlateData: bufferToBase64(reg.motoWithPlateData),
+      platePlateCloseupData: bufferToBase64(reg.platePlateCloseupData),
+      cnhPhotoData: bufferToBase64(reg.cnhPhotoData),
+      crlvPhotoData: bufferToBase64(reg.crlvPhotoData),
+    }));
+  }
+
+  /**
+   * Listar registros pendentes para revisão (admin)
+   */
+  async getPendingRegistrations(limit: number = 50, offset: number = 0) {
+    const registrations = await query<any>(
+      `SELECT dr.*, 
+              json_build_object(
+                'id', u.id,
+                'name', u.name,
+                'email', u.email,
+                'createdAt', u."createdAt"
+              ) as user
+       FROM "DeliveryRegistration" dr
+       JOIN "User" u ON u.id = dr."userId"
+       WHERE dr.status IN ('PENDING', 'UNDER_REVIEW')
+       ORDER BY dr."createdAt" DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    // Converter imagens BYTEA em base64
+    const registrationsWithBase64 = registrations.map((reg) => ({
+      ...reg,
+      selfieWithDocData: bufferToBase64(reg.selfieWithDocData),
+      motoWithPlateData: bufferToBase64(reg.motoWithPlateData),
+      platePlateCloseupData: bufferToBase64(reg.platePlateCloseupData),
+      cnhPhotoData: bufferToBase64(reg.cnhPhotoData),
+      crlvPhotoData: bufferToBase64(reg.crlvPhotoData),
+    }));
+
+    const total = await queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM "DeliveryRegistration" 
+       WHERE status IN ('PENDING', 'UNDER_REVIEW')`,
+      []
+    );
+
+    return {
+      registrations: registrationsWithBase64,
+      total: total?.count || 0,
+      limit,
+      offset,
+    };
+  }
+
+  /**
+   * Atualizar status do registro (aprovado/rejeitado)
+   */
+  async updateRegistrationStatus(
+    registrationId: string,
+    data: UpdateDeliveryRegistrationStatusDto
+  ) {
+    const registration = await queryOne<DeliveryRegistration>(
+      'SELECT * FROM "DeliveryRegistration" WHERE id = $1',
+      [registrationId]
+    );
+
+    if (!registration) {
+      throw new Error('Registro de delivery não encontrado');
+    }
+
+    const approvedAt =
+      data.status === DeliveryRegistrationStatus.APPROVED ? new Date() : null;
+
+    await query(
+      `UPDATE "DeliveryRegistration" 
+       SET status = $1, "approvedAt" = $2, "approvedBy" = $3, 
+           "rejectionReason" = $4, "adminNotes" = $5, "updatedAt" = NOW()
+       WHERE id = $6`,
+      [
+        data.status,
+        approvedAt,
+        data.approvedBy || null,
+        data.rejectionReason || null,
+        data.adminNotes || null,
+        registrationId,
+      ]
+    );
+
+    const updated = await queryOne<any>(
+      'SELECT * FROM "DeliveryRegistration" WHERE id = $1',
+      [registrationId]
+    );
+
+    if (!updated) throw new Error('Erro ao atualizar registro');
+
+    // Converter imagens em base64
+    return {
+      ...updated,
+      selfieWithDocData: bufferToBase64(updated.selfieWithDocData),
+      motoWithPlateData: bufferToBase64(updated.motoWithPlateData),
+      platePlateCloseupData: bufferToBase64(updated.platePlateCloseupData),
+      cnhPhotoData: bufferToBase64(updated.cnhPhotoData),
+      crlvPhotoData: bufferToBase64(updated.crlvPhotoData),
+    };
+  }
+
+  /**
+   * Buscar estatísticas de registros (admin)
+   */
+  async getStatistics() {
+    const stats = await queryOne<any>(
+      `SELECT
+        COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending,
+        COUNT(CASE WHEN status = 'UNDER_REVIEW' THEN 1 END) as underReview,
+        COUNT(CASE WHEN status = 'APPROVED' THEN 1 END) as approved,
+        COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) as rejected,
+        COUNT(*) as total
+       FROM "DeliveryRegistration"`,
+      []
+    );
+
+    return stats;
+  }
+}

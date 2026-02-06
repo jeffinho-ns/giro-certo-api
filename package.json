@@ -28,7 +28,6 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/multer": "^2.0.0",
     "@types/node": "^25.0.9",
     "@types/pg": "^8.11.6",
     "@types/ws": "^8.18.1",
@@ -45,6 +44,7 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
+    "@types/multer": "^2.0.0",
     "nodemon": "^3.1.11",
     "ts-node-dev": "^2.0.0"
   }
