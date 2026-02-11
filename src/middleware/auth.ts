@@ -35,7 +35,7 @@ export async function authenticateToken(
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; role?: UserRole };
     
     const user = await queryOne<User>(
-      `SELECT id, name, email, role, "isSubscriber", "subscriptionType"
+      `SELECT id, name, email, role, "partnerId", "isSubscriber", "subscriptionType"
        FROM "User" WHERE id = $1`,
       [decoded.userId]
     );
@@ -84,3 +84,5 @@ export function requireModerator(
   }
   next();
 }
+
+

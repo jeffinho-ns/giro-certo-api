@@ -1,19 +1,57 @@
 import { Router, Request, Response } from 'express';
-import { query, queryOne } from '../lib/db';
+import { query, queryOne, transaction } from '../lib/db';
 import { authenticateToken, AuthRequest, requireAdmin } from '../middleware/auth';
-import { UpdateUserLocationDto, User, Bike, Wallet, UserRole } from '../types';
+import { UpdateUserLocationDto, User, Bike, Wallet, UserRole, UserType, PilotProfile } from '../types';
 
 const router = Router();
+
+const USER_TYPE_SQL = `
+  CASE
+    WHEN u."partnerId" IS NOT NULL THEN 'LOJISTA'
+    WHEN u."pilotProfile" = 'FIM_DE_SEMANA' THEN 'CASUAL'
+    WHEN u."pilotProfile" = 'URBANO' THEN 'DIARIO'
+    WHEN u."pilotProfile" = 'PISTA' THEN 'RACING'
+    WHEN u."pilotProfile" = 'TRABALHO' THEN 'DELIVERY'
+    ELSE NULL
+  END
+`;
+
+const USER_TYPE_TO_PILOT_PROFILE: Record<UserType, PilotProfile | null> = {
+  [UserType.CASUAL]: PilotProfile.FIM_DE_SEMANA,
+  [UserType.DIARIO]: PilotProfile.URBANO,
+  [UserType.RACING]: PilotProfile.PISTA,
+  [UserType.DELIVERY]: PilotProfile.TRABALHO,
+  [UserType.LOJISTA]: null,
+};
+
+const getParam = (value: string | string[] | undefined): string => {
+  if (Array.isArray(value)) {
+    return value[0] || '';
+  }
+  return value || '';
+};
+
+const parseUserType = (value: unknown): UserType | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  if (!Object.values(UserType).includes(value as UserType)) {
+    return null;
+  }
+  return value as UserType;
+};
 
 // Buscar todos os usuários (admin/moderator)
 router.get('/', authenticateToken, async (req: Request, res: Response) => {
   try {
     const users = await query<User>(
-      `SELECT id, name, email, age, "photoUrl", "pilotProfile", role,
-              "isSubscriber", "subscriptionType", "loyaltyPoints",
-              "currentLat", "currentLng", "isOnline", "createdAt"
-       FROM "User"
-       ORDER BY "createdAt" DESC`
+      `SELECT
+         u.id, u.name, u.email, u.age, u."photoUrl", u."pilotProfile", u.role, u."partnerId",
+         u."isSubscriber", u."subscriptionType", u."loyaltyPoints",
+         u."currentLat", u."currentLng", u."isOnline", u."createdAt", u."updatedAt",
+         ${USER_TYPE_SQL} as "userType"
+       FROM "User" u
+       ORDER BY u."createdAt" DESC`
     );
     res.json({ users });
   } catch (error: any) {
@@ -24,11 +62,12 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
 // Buscar usuário por ID
 router.get('/:userId', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+    const userId = getParam(req.params.userId);
     
     const user = await queryOne<User & { bikes: Bike[]; wallet: Wallet & { transactions: any[] } }>(
       `SELECT 
         u.*,
+        ${USER_TYPE_SQL} as "userType",
         COALESCE(
           json_agg(DISTINCT jsonb_build_object(
             'id', b.id,
@@ -64,7 +103,8 @@ router.get('/:userId', authenticateToken, async (req: Request, res: Response) =>
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
-    res.json({ user });
+    const { password, ...userWithoutPassword } = user as any;
+    res.json({ user: userWithoutPassword });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -80,6 +120,7 @@ router.get('/me/profile', authenticateToken, async (req: AuthRequest, res: Respo
     const user = await queryOne<User & { bikes: Bike[]; wallet: Wallet }>(
       `SELECT 
         u.*,
+        ${USER_TYPE_SQL} as "userType",
         COALESCE(
           json_agg(DISTINCT jsonb_build_object(
             'id', b.id,
@@ -108,7 +149,7 @@ router.get('/me/profile', authenticateToken, async (req: AuthRequest, res: Respo
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
-    const { password, ...userWithoutPassword } = user;
+    const { password, ...userWithoutPassword } = user as any;
     res.json({ user: userWithoutPassword });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -173,17 +214,100 @@ router.get('/me/stats', authenticateToken, async (req: AuthRequest, res: Respons
   }
 });
 
+const handleUpdateUserType = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = getParam(req.params.userId);
+    const requestedUserType = parseUserType(req.body?.userType ?? req.body?.type);
+
+    if (!requestedUserType) {
+      return res.status(400).json({
+        error: 'Tipo de usuário inválido. Use: CASUAL, DIARIO, RACING, DELIVERY ou LOJISTA',
+      });
+    }
+
+    const user = await queryOne<User>(
+      `SELECT id, name, email, role, "pilotProfile", "partnerId"
+       FROM "User"
+       WHERE id = $1`,
+      [userId]
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    if (requestedUserType === UserType.LOJISTA) {
+      const bodyPartnerId = typeof req.body?.partnerId === 'string' ? req.body.partnerId : null;
+      const partnerId = bodyPartnerId || user.partnerId;
+
+      if (!partnerId) {
+        return res.status(400).json({
+          error:
+            'Para definir o tipo LOJISTA o usuário precisa estar vinculado a uma loja (partnerId).',
+        });
+      }
+
+      if (bodyPartnerId) {
+        const partner = await queryOne<{ id: string }>(
+          'SELECT id FROM "Partner" WHERE id = $1',
+          [bodyPartnerId]
+        );
+
+        if (!partner) {
+          return res.status(404).json({ error: 'Parceiro não encontrado para o partnerId informado' });
+        }
+      }
+
+      await query(
+        `UPDATE "User"
+         SET "partnerId" = $1, "updatedAt" = NOW()
+         WHERE id = $2`,
+        [partnerId, userId]
+      );
+    } else {
+      const pilotProfile = USER_TYPE_TO_PILOT_PROFILE[requestedUserType];
+
+      if (!pilotProfile) {
+        return res.status(400).json({ error: 'Tipo de usuário inválido para perfil de motociclista' });
+      }
+
+      await query(
+        `UPDATE "User"
+         SET "pilotProfile" = $1, "partnerId" = NULL, "updatedAt" = NOW()
+         WHERE id = $2`,
+        [pilotProfile, userId]
+      );
+    }
+
+    const updatedUser = await queryOne<User>(
+      `SELECT
+         u.id, u.name, u.email, u.role, u."pilotProfile", u."partnerId", u."updatedAt",
+         ${USER_TYPE_SQL} as "userType"
+       FROM "User" u
+       WHERE u.id = $1`,
+      [userId]
+    );
+
+    res.json({ message: 'Tipo de usuário atualizado com sucesso', user: updatedUser });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+};
+
+// Atualizar tipo de usuário (apenas admin)
+router.put('/:userId/type', authenticateToken, requireAdmin, handleUpdateUserType);
+router.put('/:userId/user-type', authenticateToken, requireAdmin, handleUpdateUserType);
+
 // Atualizar role do usuário (apenas admin)
 router.put('/:userId/role', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+    const userId = getParam(req.params.userId);
     const { role } = req.body;
 
     if (!role || !Object.values(UserRole).includes(role)) {
       return res.status(400).json({ error: 'Role inválido' });
     }
 
-    // Não permitir que um admin remova seu próprio acesso de admin
     if (req.userId === userId && role !== UserRole.ADMIN) {
       return res.status(400).json({ error: 'Você não pode remover seu próprio acesso de administrador' });
     }
@@ -204,17 +328,74 @@ router.put('/:userId/role', authenticateToken, requireAdmin, async (req: AuthReq
   }
 });
 
+// Excluir usuário (apenas admin)
+router.delete('/:userId', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = getParam(req.params.userId);
+
+    if (!userId) {
+      return res.status(400).json({ error: 'ID do usuário é obrigatório' });
+    }
+
+    if (req.userId === userId) {
+      return res.status(400).json({ error: 'Você não pode excluir sua própria conta de administrador' });
+    }
+
+    const user = await queryOne<Pick<User, 'id' | 'name' | 'email' | 'role'>>(
+      `SELECT id, name, email, role
+       FROM "User"
+       WHERE id = $1`,
+      [userId]
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    await transaction(async (client: any) => {
+      await client.query(
+        `UPDATE "DeliveryOrder"
+         SET "riderId" = NULL, "riderName" = NULL
+         WHERE "riderId" = $1`,
+        [userId]
+      );
+
+      const deliveryRegistrationTable = await client.query(
+        `SELECT to_regclass('"DeliveryRegistration"') as "tableName"`
+      );
+      const deliveryRegistrationTableName = deliveryRegistrationTable.rows[0]?.tableName;
+
+      if (deliveryRegistrationTableName) {
+        await client.query(
+          `DELETE FROM "DeliveryRegistration"
+           WHERE "userId" = $1`,
+          [userId]
+        );
+      }
+
+      await client.query(
+        `DELETE FROM "User"
+         WHERE id = $1`,
+        [userId]
+      );
+    });
+
+    res.json({ message: 'Usuário excluído com sucesso', user });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Conceder/remover selo de verificação (apenas admin)
 router.put('/:userId/verification-badge', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+    const userId = getParam(req.params.userId);
     const { verificationBadge } = req.body;
 
     if (typeof verificationBadge !== 'boolean') {
       return res.status(400).json({ error: 'verificationBadge deve ser um booleano' });
     }
 
-    // Se está concedendo o selo, verificar se o usuário tem documentos verificados
     if (verificationBadge) {
       const user = await queryOne<User>(
         `SELECT "hasVerifiedDocuments" FROM "User" WHERE id = $1`,

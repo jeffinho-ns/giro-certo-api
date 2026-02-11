@@ -125,8 +125,17 @@ export enum UserRole {
   ADMIN = 'ADMIN',
 }
 
+export enum UserType {
+  CASUAL = 'CASUAL',
+  DIARIO = 'DIARIO',
+  RACING = 'RACING',
+  DELIVERY = 'DELIVERY',
+  LOJISTA = 'LOJISTA',
+}
+
 // Interfaces de Request
-export interface AuthRequest extends Express.Request {
+// Nota: Certifique-se de ter o @types/express instalado para estender o Request
+export interface AuthRequest {
   userId?: string;
   user?: any;
 }
@@ -216,6 +225,7 @@ export interface User {
   age: number;
   photoUrl: string | null;
   pilotProfile: PilotProfile;
+  userType?: UserType | null;
   role: UserRole;
   partnerId: string | null; // ID do parceiro vinculado (para lojistas)
   isSubscriber: boolean;
