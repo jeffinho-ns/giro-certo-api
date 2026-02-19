@@ -121,6 +121,27 @@ router.post('/:postId/like', authenticateToken, async (req: AuthRequest, res: Re
   }
 });
 
+// Listar comentários de um post
+router.get('/:postId/comments', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const postId = Array.isArray(req.params.postId) ? req.params.postId[0] : req.params.postId;
+
+    const comments = await query<{ id: string; content: string; createdAt: Date; user: any }>(
+      `SELECT c.id, c.content, c."createdAt",
+              json_build_object('id', u.id, 'name', u.name, 'photoUrl', u."photoUrl") as user
+       FROM "Comment" c
+       LEFT JOIN "User" u ON u.id = c."userId"
+       WHERE c."postId" = $1
+       ORDER BY c."createdAt" ASC`,
+      [postId]
+    );
+
+    res.json({ comments });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Comentar post
 router.post('/:postId/comments', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {

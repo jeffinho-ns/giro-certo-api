@@ -5,6 +5,10 @@ export enum AlertType {
   DOCUMENT_EXPIRING = 'DOCUMENT_EXPIRING',
   MAINTENANCE_CRITICAL = 'MAINTENANCE_CRITICAL',
   PAYMENT_OVERDUE = 'PAYMENT_OVERDUE',
+  BROADCAST_NEED_HELP = 'BROADCAST_NEED_HELP',
+  BROADCAST_BIKE_STOPPED = 'BROADCAST_BIKE_STOPPED',
+  BROADCAST_ACCIDENT = 'BROADCAST_ACCIDENT',
+  BROADCAST_BLITZ = 'BROADCAST_BLITZ',
 }
 
 export enum AlertSeverity {
@@ -193,6 +197,34 @@ export class AlertService {
    */
   async deleteAlert(alertId: string): Promise<void> {
     await query('DELETE FROM "Alert" WHERE id = $1', [alertId]);
+  }
+
+  /**
+   * Criar alertas de broadcast para vários usuários (rede ou comunidade).
+   * targetUserIds: lista de IDs que devem receber o alerta.
+   */
+  async createBroadcastAlerts(params: {
+    senderUserId: string;
+    senderName: string;
+    type: AlertType;
+    message: string;
+    targetUserIds: string[];
+  }): Promise<number> {
+    const { senderUserId, senderName, type, message, targetUserIds } = params;
+    const title = `${senderName}: ${message}`;
+    let created = 0;
+    for (const userId of targetUserIds) {
+      if (userId === senderUserId) continue;
+      await this.createAlert({
+        type,
+        severity: AlertSeverity.HIGH,
+        title,
+        message,
+        userId,
+      });
+      created++;
+    }
+    return created;
   }
 
   /**

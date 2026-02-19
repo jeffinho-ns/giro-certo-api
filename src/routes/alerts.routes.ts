@@ -1,9 +1,24 @@
 import { Router, Request, Response } from 'express';
 import { AlertService, AlertType, AlertSeverity } from '../services/alert.service';
 import { authenticateToken, AuthRequest, requireModerator } from '../middleware/auth';
+import { query } from '../lib/db';
 
 const router = Router();
 const alertService = new AlertService();
+
+const BROADCAST_TYPE_MAP: Record<string, AlertType> = {
+  need_help: AlertType.BROADCAST_NEED_HELP,
+  bike_stopped: AlertType.BROADCAST_BIKE_STOPPED,
+  accident: AlertType.BROADCAST_ACCIDENT,
+  blitz: AlertType.BROADCAST_BLITZ,
+};
+
+const BROADCAST_MESSAGE_MAP: Record<string, string> = {
+  need_help: 'Preciso de ajuda com a moto',
+  bike_stopped: 'Moto parada na estrada',
+  accident: 'Acidente na estrada',
+  blitz: 'Blitz fiscalização',
+};
 
 // Listar alertas do usuário logado (para usuários comuns)
 router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -161,6 +176,47 @@ router.post('/check', authenticateToken, requireModerator, async (req: Request, 
     res.json({
       message: `${alertsCreated} alertas criados`,
       alertsCreated,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Enviar notificação de broadcast para rede ou comunidade (app social)
+router.post('/broadcast', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+    const userName = req.user?.name ?? 'Utilizador';
+    const { target, type } = req.body as { target?: string; type?: string };
+
+    if (!target || !type) {
+      return res.status(400).json({ error: 'target e type são obrigatórios' });
+    }
+
+    const alertType = BROADCAST_TYPE_MAP[type];
+    const message = BROADCAST_MESSAGE_MAP[type];
+
+    if (!alertType || !message) {
+      return res.status(400).json({
+        error: 'type inválido. Use: need_help, bike_stopped, accident, blitz',
+      });
+    }
+
+    // Por agora: rede e comunidade = todos os utilizadores (excluindo o remetente)
+    const rows = await query<{ id: string }>('SELECT id FROM "User"');
+    const targetUserIds = rows.map((r) => r.id);
+
+    const created = await alertService.createBroadcastAlerts({
+      senderUserId: userId!,
+      senderName: userName,
+      type: alertType,
+      message,
+      targetUserIds,
+    });
+
+    res.json({
+      message: `Notificação enviada para ${created} utilizadores`,
+      sentCount: created,
     });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
