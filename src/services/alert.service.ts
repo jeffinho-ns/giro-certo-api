@@ -388,6 +388,10 @@ export class AlertService {
       documentExpiring: string;
       maintenanceCritical: string;
       paymentOverdue: string;
+      broadcastNeedHelp: string;
+      broadcastBikeStopped: string;
+      broadcastAccident: string;
+      broadcastBlitz: string;
       low: string;
       medium: string;
       high: string;
@@ -399,6 +403,10 @@ export class AlertService {
         COUNT(*) FILTER (WHERE type = 'DOCUMENT_EXPIRING') as "documentExpiring",
         COUNT(*) FILTER (WHERE type = 'MAINTENANCE_CRITICAL') as "maintenanceCritical",
         COUNT(*) FILTER (WHERE type = 'PAYMENT_OVERDUE') as "paymentOverdue",
+        COUNT(*) FILTER (WHERE type = 'BROADCAST_NEED_HELP') as "broadcastNeedHelp",
+        COUNT(*) FILTER (WHERE type = 'BROADCAST_BIKE_STOPPED') as "broadcastBikeStopped",
+        COUNT(*) FILTER (WHERE type = 'BROADCAST_ACCIDENT') as "broadcastAccident",
+        COUNT(*) FILTER (WHERE type = 'BROADCAST_BLITZ') as "broadcastBlitz",
         COUNT(*) FILTER (WHERE severity = 'LOW') as low,
         COUNT(*) FILTER (WHERE severity = 'MEDIUM') as medium,
         COUNT(*) FILTER (WHERE severity = 'HIGH') as high,
@@ -415,6 +423,10 @@ export class AlertService {
         [AlertType.DOCUMENT_EXPIRING]: parseInt(stats?.documentExpiring || '0'),
         [AlertType.MAINTENANCE_CRITICAL]: parseInt(stats?.maintenanceCritical || '0'),
         [AlertType.PAYMENT_OVERDUE]: parseInt(stats?.paymentOverdue || '0'),
+        [AlertType.BROADCAST_NEED_HELP]: parseInt(stats?.broadcastNeedHelp || '0'),
+        [AlertType.BROADCAST_BIKE_STOPPED]: parseInt(stats?.broadcastBikeStopped || '0'),
+        [AlertType.BROADCAST_ACCIDENT]: parseInt(stats?.broadcastAccident || '0'),
+        [AlertType.BROADCAST_BLITZ]: parseInt(stats?.broadcastBlitz || '0'),
       },
       bySeverity: {
         [AlertSeverity.LOW]: parseInt(stats?.low || '0'),
