@@ -341,7 +341,11 @@ router.post(
         true
       );
 
-      const baseUrl = process.env.API_URL || 'https://giro-certo-api.onrender.com';
+      const baseUrl =
+        process.env.API_URL ||
+        (req.protocol && req.get('host')
+          ? `${req.protocol}://${req.get('host')}`
+          : 'https://giro-certo-api.onrender.com');
       const imageUrl = `${baseUrl}/api/images/${image.id}`;
 
       if (type === 'cover') {
