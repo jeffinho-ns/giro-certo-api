@@ -4,11 +4,13 @@ import { query, queryOne, transaction } from '../lib/db';
 import { authenticateToken, AuthRequest, requireAdmin } from '../middleware/auth';
 import { UpdateUserLocationDto, User, Bike, Wallet, UserRole, UserType, PilotProfile } from '../types';
 import { ImageService } from '../services/image.service';
+import { AlertService, AlertType, AlertSeverity } from '../services/alert.service';
 import { ImageEntityType } from '../types';
 import { generateId } from '../utils/id';
 
 const router = Router();
 const imageService = new ImageService();
+const alertService = new AlertService();
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -77,9 +79,9 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
 router.get('/search', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const q = (req.query.q as string)?.trim()?.replace(/^@/, '') || '';
-    const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 50);
+    const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 100);
 
-    if (q.length < 2) {
+    if (q.length < 1) {
       return res.json({ users: [] });
     }
 
@@ -266,7 +268,7 @@ router.patch('/me/profile', authenticateToken, async (req: AuthRequest, res: Res
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const { name, photoUrl } = req.body as { name?: string; photoUrl?: string; coverUrl?: string };
+    const { name, photoUrl, coverUrl } = req.body as { name?: string; photoUrl?: string; coverUrl?: string };
     const updates: string[] = [];
     const values: any[] = [];
     let pos = 1;
@@ -278,6 +280,10 @@ router.patch('/me/profile', authenticateToken, async (req: AuthRequest, res: Res
     if (typeof photoUrl === 'string') {
       updates.push(`"photoUrl" = $${pos++}`);
       values.push(photoUrl || null);
+    }
+    if (typeof coverUrl === 'string') {
+      updates.push(`"coverUrl" = $${pos++}`);
+      values.push(coverUrl || null);
     }
 
     if (updates.length === 0) {
@@ -293,7 +299,7 @@ router.patch('/me/profile', authenticateToken, async (req: AuthRequest, res: Res
     );
 
     const user = await queryOne<User>(
-      `SELECT id, name, email, age, "photoUrl", "pilotProfile", role, "partnerId",
+      `SELECT id, name, email, age, "photoUrl", "coverUrl", "pilotProfile", role, "partnerId",
         "isSubscriber", "hasVerifiedDocuments", "verificationBadge", "isOnline",
         "currentLat", "currentLng", "createdAt", "updatedAt"
        FROM "User" WHERE id = $1`,
@@ -327,7 +333,7 @@ router.post(
         return res.status(400).json({ error: 'Nenhuma imagem fornecida' });
       }
 
-      const type = (req.body?.type as string) || 'avatar';
+      const type = ((req.body?.type as string) || 'avatar').toLowerCase();
       const image = await imageService.uploadImage(
         ImageEntityType.USER,
         req.userId,
@@ -338,10 +344,17 @@ router.post(
       const baseUrl = process.env.API_URL || 'https://giro-certo-api.onrender.com';
       const imageUrl = `${baseUrl}/api/images/${image.id}`;
 
-      await query(
-        `UPDATE "User" SET "photoUrl" = $1, "updatedAt" = NOW() WHERE id = $2`,
-        [imageUrl, req.userId]
-      );
+      if (type === 'cover') {
+        await query(
+          `UPDATE "User" SET "coverUrl" = $1, "updatedAt" = NOW() WHERE id = $2`,
+          [imageUrl, req.userId]
+        );
+      } else {
+        await query(
+          `UPDATE "User" SET "photoUrl" = $1, "updatedAt" = NOW() WHERE id = $2`,
+          [imageUrl, req.userId]
+        );
+      }
 
       res.status(201).json({ url: imageUrl, imageUrl });
     } catch (error: any) {
@@ -349,6 +362,145 @@ router.post(
     }
   }
 );
+
+// Listar pedidos de seguimento recebidos (pendentes)
+router.get('/me/follow-requests', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const targetId = req.userId!;
+    const hasTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'FollowRequest') as exists`
+    );
+    if (!hasTable?.exists) {
+      return res.json({ requests: [] });
+    }
+
+    const requests = await query<{
+      id: string;
+      requesterId: string;
+      requesterName: string;
+      requesterPhotoUrl: string | null;
+      createdAt: Date;
+    }>(
+      `SELECT fr.id, fr."requesterId", u.name as "requesterName", u."photoUrl" as "requesterPhotoUrl", fr."createdAt"
+       FROM "FollowRequest" fr
+       JOIN "User" u ON u.id = fr."requesterId"
+       WHERE fr."targetId" = $1 AND fr.status = 'pending'
+       ORDER BY fr."createdAt" DESC`,
+      [targetId]
+    );
+
+    res.json({ requests });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Listar pedidos de seguimento enviados por mim (para mostrar "Solicitação enviada")
+router.get('/me/follow-requests/sent', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const requesterId = req.userId!;
+    const hasTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'FollowRequest') as exists`
+    );
+    if (!hasTable?.exists) {
+      return res.json({ targetIds: [] });
+    }
+
+    const rows = await query<{ targetId: string }>(
+      `SELECT "targetId" FROM "FollowRequest" WHERE "requesterId" = $1 AND status = 'pending'`,
+      [requesterId]
+    );
+
+    res.json({ targetIds: rows.map((r) => r.targetId) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Aceitar pedido de seguimento (e opcionalmente seguir de volta)
+router.post('/me/follow-requests/:requestId/accept', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const targetId = req.userId!;
+    const requestId = getParam(req.params.requestId);
+    const followBack = (req.body as { followBack?: boolean })?.followBack === true;
+
+    const reqRow = await queryOne<{ id: string; requesterId: string; status: string }>(
+      'SELECT id, "requesterId", status FROM "FollowRequest" WHERE id = $1 AND "targetId" = $2',
+      [requestId, targetId]
+    );
+    if (!reqRow || reqRow.status !== 'pending') {
+      return res.status(404).json({ error: 'Pedido não encontrado ou já respondido' });
+    }
+
+    const requesterId = reqRow.requesterId;
+    const targetUser = await queryOne<{ name: string }>('SELECT name FROM "User" WHERE id = $1', [targetId]);
+
+    await transaction(async (client: any) => {
+      await client.query(
+        `UPDATE "FollowRequest" SET status = 'accepted', "respondedAt" = NOW() WHERE id = $1`,
+        [requestId]
+      );
+      const followExists = await queryOne<{ exists: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Follow') as exists`
+      );
+      if (followExists?.exists) {
+        await client.query(
+          `INSERT INTO "Follow" (id, "followerId", "followingId") VALUES ($1, $2, $3) ON CONFLICT ("followerId", "followingId") DO NOTHING`,
+          [generateId(), requesterId, targetId]
+        );
+        if (followBack) {
+          await client.query(
+            `INSERT INTO "Follow" (id, "followerId", "followingId") VALUES ($1, $2, $3) ON CONFLICT ("followerId", "followingId") DO NOTHING`,
+            [generateId(), targetId, requesterId]
+          );
+        }
+      }
+    });
+
+    await alertService.createAlert({
+      type: AlertType.FOLLOW_REQUEST,
+      severity: AlertSeverity.LOW,
+      title: 'Pedido aceite',
+      message: `${targetUser?.name || 'Alguém'} aceitou o teu pedido de seguimento${followBack ? ' e seguiu-te de volta' : ''}.`,
+      userId: requesterId,
+      metadata: { type: 'follow_request_accepted', targetId, followBack },
+    });
+
+    const io = (req as any).app?.get?.('io');
+    if (io?.to) {
+      io.to(`user:${requesterId}`).emit('notification', { type: 'follow_request_accepted', targetName: targetUser?.name });
+    }
+
+    res.json({ message: 'Pedido aceite', followBack });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Rejeitar pedido de seguimento
+router.post('/me/follow-requests/:requestId/reject', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const targetId = req.userId!;
+    const requestId = getParam(req.params.requestId);
+
+    const reqRow = await queryOne<{ id: string; status: string }>(
+      'SELECT id, status FROM "FollowRequest" WHERE id = $1 AND "targetId" = $2',
+      [requestId, targetId]
+    );
+    if (!reqRow || reqRow.status !== 'pending') {
+      return res.status(404).json({ error: 'Pedido não encontrado ou já respondido' });
+    }
+
+    await query(
+      `UPDATE "FollowRequest" SET status = 'rejected', "respondedAt" = NOW() WHERE id = $1`,
+      [requestId]
+    );
+
+    res.json({ message: 'Pedido rejeitado' });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
 
 const handleUpdateUserType = async (req: AuthRequest, res: Response) => {
   try {
@@ -522,7 +674,63 @@ router.delete('/:userId', authenticateToken, requireAdmin, async (req: AuthReque
   }
 });
 
-// Seguir utilizador (rede social)
+// Enviar pedido de seguimento (rede social)
+router.post('/:userId/follow-request', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const requesterId = req.userId!;
+    const targetId = getParam(req.params.userId);
+
+    if (requesterId === targetId) {
+      return res.status(400).json({ error: 'Não pode enviar pedido a si mesmo' });
+    }
+
+    const targetUser = await queryOne<{ id: string; name: string }>(
+      'SELECT id, name FROM "User" WHERE id = $1',
+      [targetId]
+    );
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Utilizador não encontrado' });
+    }
+
+    const hasTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'FollowRequest') as exists`
+    );
+    if (!hasTable?.exists) {
+      return res.status(501).json({ error: 'Tabela FollowRequest não existe. Execute a migração migrate-follow-requests.sql' });
+    }
+
+    const requester = await queryOne<{ name: string }>('SELECT name FROM "User" WHERE id = $1', [requesterId]);
+    const requestId = generateId();
+
+    const inserted = await query<{ id: string }>(
+      `INSERT INTO "FollowRequest" (id, "requesterId", "targetId", status) VALUES ($1, $2, $3, 'pending')
+       ON CONFLICT ("requesterId", "targetId") DO UPDATE SET status = 'pending', "respondedAt" = NULL
+       RETURNING id`,
+      [requestId, requesterId, targetId]
+    );
+    const finalRequestId = inserted?.[0]?.id || requestId;
+
+    const alert = await alertService.createAlert({
+      type: AlertType.FOLLOW_REQUEST,
+      severity: AlertSeverity.MEDIUM,
+      title: 'Pedido de seguimento',
+      message: `${requester?.name || 'Alguém'} quer seguir-te.`,
+      userId: targetId,
+      metadata: { followRequestId: finalRequestId, requesterId, requesterName: requester?.name },
+    });
+
+    const io = (req as any).app?.get?.('io');
+    if (io?.to) {
+      io.to(`user:${targetId}`).emit('notification', alert);
+    }
+
+    res.status(201).json({ message: 'Pedido enviado', requestId: finalRequestId });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Seguir utilizador (rede social) — direto (ex.: após aceitar pedido)
 router.post('/:userId/follow', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const followerId = req.userId!;

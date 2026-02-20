@@ -1,10 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { DeliveryRegistrationService } from '../services/delivery-registration.service';
+import { AlertService, AlertType, AlertSeverity } from '../services/alert.service';
 import { authenticateToken, AuthRequest, requireAdmin, requireModerator } from '../middleware/auth';
 import { CreateDeliveryRegistrationDto, UpdateDeliveryRegistrationStatusDto } from '../types';
 
 const router = Router();
 const registrationService = new DeliveryRegistrationService();
+const alertService = new AlertService();
 
 // Criar novo registro de delivery (entregador) - aceitando imagens em base64 ou multipart
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -122,6 +124,20 @@ router.put('/:registrationId/status', authenticateToken, requireAdmin, async (re
       registrationId,
       data
     );
+
+    if (data.status === 'APPROVED' && registration?.userId) {
+      const alert = await alertService.createAlert({
+        type: AlertType.DELIVERY_APPROVED,
+        severity: AlertSeverity.MEDIUM,
+        title: 'Documentação aprovada',
+        message: 'A tua documentação de entregador foi aprovada. Já podes fazer entregas.',
+        userId: registration.userId,
+      });
+      const io = (req as any).app?.get?.('io');
+      if (io?.to) {
+        io.to(`user:${registration.userId}`).emit('notification', alert);
+      }
+    }
 
     res.json({ registration });
   } catch (error: any) {

@@ -37,6 +37,7 @@ const io = new Server(httpServer, {
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
   }
 });
+app.set('io', io);
 
 const PORT = process.env.PORT || 3001;
 
@@ -90,6 +91,13 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log('Cliente desconectado:', socket.id);
+  });
+
+  socket.on('auth', (data: { userId?: string }) => {
+    const userId = data?.userId;
+    if (userId && typeof userId === 'string') {
+      socket.join(`user:${userId}`);
+    }
   });
 
   // Escutar atualizações de localização dos motociclistas

@@ -9,6 +9,8 @@ export enum AlertType {
   BROADCAST_BIKE_STOPPED = 'BROADCAST_BIKE_STOPPED',
   BROADCAST_ACCIDENT = 'BROADCAST_ACCIDENT',
   BROADCAST_BLITZ = 'BROADCAST_BLITZ',
+  FOLLOW_REQUEST = 'FOLLOW_REQUEST',
+  DELIVERY_APPROVED = 'DELIVERY_APPROVED',
 }
 
 export enum AlertSeverity {
@@ -29,6 +31,7 @@ export interface Alert {
   isRead: boolean;
   readAt: Date | null;
   createdAt: Date;
+  metadata?: Record<string, unknown> | null;
 }
 
 export class AlertService {
@@ -42,23 +45,47 @@ export class AlertService {
     message: string;
     userId?: string;
     partnerId?: string;
+    metadata?: Record<string, unknown>;
   }): Promise<Alert> {
     const alertId = generateId();
+    const metadataJson = data.metadata ? JSON.stringify(data.metadata) : null;
 
-    await query(
-      `INSERT INTO "Alert" (
-        id, type, severity, title, message, "userId", "partnerId", "isRead", "createdAt"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, false, NOW())`,
-      [
-        alertId,
-        data.type,
-        data.severity,
-        data.title,
-        data.message,
-        data.userId || null,
-        data.partnerId || null,
-      ]
-    );
+    try {
+      await query(
+        `INSERT INTO "Alert" (
+          id, type, severity, title, message, "userId", "partnerId", "isRead", "createdAt", metadata
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, false, NOW(), $8)`,
+        [
+          alertId,
+          data.type,
+          data.severity,
+          data.title,
+          data.message,
+          data.userId || null,
+          data.partnerId || null,
+          metadataJson,
+        ]
+      );
+    } catch (err: any) {
+      if (err?.message?.includes('metadata') || err?.message?.includes('column')) {
+        await query(
+          `INSERT INTO "Alert" (
+            id, type, severity, title, message, "userId", "partnerId", "isRead", "createdAt"
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, false, NOW())`,
+          [
+            alertId,
+            data.type,
+            data.severity,
+            data.title,
+            data.message,
+            data.userId || null,
+            data.partnerId || null,
+          ]
+        );
+      } else {
+        throw err;
+      }
+    }
 
     const alert = await queryOne<Alert>('SELECT * FROM "Alert" WHERE id = $1', [alertId]);
     if (!alert) {
@@ -392,6 +419,8 @@ export class AlertService {
       broadcastBikeStopped: string;
       broadcastAccident: string;
       broadcastBlitz: string;
+      followRequest: string;
+      deliveryApproved: string;
       low: string;
       medium: string;
       high: string;
@@ -407,6 +436,8 @@ export class AlertService {
         COUNT(*) FILTER (WHERE type = 'BROADCAST_BIKE_STOPPED') as "broadcastBikeStopped",
         COUNT(*) FILTER (WHERE type = 'BROADCAST_ACCIDENT') as "broadcastAccident",
         COUNT(*) FILTER (WHERE type = 'BROADCAST_BLITZ') as "broadcastBlitz",
+        COUNT(*) FILTER (WHERE type = 'FOLLOW_REQUEST') as "followRequest",
+        COUNT(*) FILTER (WHERE type = 'DELIVERY_APPROVED') as "deliveryApproved",
         COUNT(*) FILTER (WHERE severity = 'LOW') as low,
         COUNT(*) FILTER (WHERE severity = 'MEDIUM') as medium,
         COUNT(*) FILTER (WHERE severity = 'HIGH') as high,
@@ -427,6 +458,8 @@ export class AlertService {
         [AlertType.BROADCAST_BIKE_STOPPED]: parseInt(stats?.broadcastBikeStopped || '0'),
         [AlertType.BROADCAST_ACCIDENT]: parseInt(stats?.broadcastAccident || '0'),
         [AlertType.BROADCAST_BLITZ]: parseInt(stats?.broadcastBlitz || '0'),
+        [AlertType.FOLLOW_REQUEST]: parseInt(stats?.followRequest || '0'),
+        [AlertType.DELIVERY_APPROVED]: parseInt(stats?.deliveryApproved || '0'),
       },
       bySeverity: {
         [AlertSeverity.LOW]: parseInt(stats?.low || '0'),

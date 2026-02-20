@@ -224,6 +224,7 @@ export interface User {
   password: string;
   age: number;
   photoUrl: string | null;
+  coverUrl?: string | null;
   pilotProfile: PilotProfile;
   userType?: UserType | null;
   role: UserRole;
