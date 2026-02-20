@@ -1,9 +1,23 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import { query, queryOne, transaction } from '../lib/db';
 import { authenticateToken, AuthRequest, requireAdmin } from '../middleware/auth';
 import { UpdateUserLocationDto, User, Bike, Wallet, UserRole, UserType, PilotProfile } from '../types';
+import { ImageService } from '../services/image.service';
+import { ImageEntityType } from '../types';
+import { generateId } from '../utils/id';
 
 const router = Router();
+const imageService = new ImageService();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Apenas imagens são permitidas'));
+  },
+});
 
 const USER_TYPE_SQL = `
   CASE
@@ -54,6 +68,37 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
        ORDER BY u."createdAt" DESC`
     );
     res.json({ users });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Buscar utilizadores por nome (rede social - ex: @jeff) — deve vir antes de /:userId
+router.get('/search', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const q = (req.query.q as string)?.trim()?.replace(/^@/, '') || '';
+    const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 50);
+
+    if (q.length < 2) {
+      return res.json({ users: [] });
+    }
+
+    const users = await query<User>(
+      `SELECT id, name, email, age, "photoUrl", "pilotProfile", "createdAt"
+       FROM "User"
+       WHERE (LOWER(name) LIKE $1 OR LOWER(email) LIKE $1)
+         AND id != $2
+       ORDER BY name
+       LIMIT $3`,
+      [`%${q.toLowerCase()}%`, req.userId || '', limit]
+    );
+
+    const safeUsers = users.map((u) => {
+      const { password, ...rest } = u as any;
+      return rest;
+    });
+
+    res.json({ users: safeUsers });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -213,6 +258,97 @@ router.get('/me/stats', authenticateToken, async (req: AuthRequest, res: Respons
     res.status(400).json({ error: error.message });
   }
 });
+
+// Atualizar perfil (nome, photoUrl)
+router.patch('/me/profile', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+
+    const { name, photoUrl } = req.body as { name?: string; photoUrl?: string; coverUrl?: string };
+    const updates: string[] = [];
+    const values: any[] = [];
+    let pos = 1;
+
+    if (typeof name === 'string' && name.trim()) {
+      updates.push(`name = $${pos++}`);
+      values.push(name.trim());
+    }
+    if (typeof photoUrl === 'string') {
+      updates.push(`"photoUrl" = $${pos++}`);
+      values.push(photoUrl || null);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'Nenhum campo válido para atualizar' });
+    }
+
+    updates.push('"updatedAt" = NOW()');
+    values.push(req.userId);
+
+    await query(
+      `UPDATE "User" SET ${updates.join(', ')} WHERE id = $${pos}`,
+      values
+    );
+
+    const user = await queryOne<User>(
+      `SELECT id, name, email, age, "photoUrl", "pilotProfile", role, "partnerId",
+        "isSubscriber", "hasVerifiedDocuments", "verificationBadge", "isOnline",
+        "currentLat", "currentLng", "createdAt", "updatedAt"
+       FROM "User" WHERE id = $1`,
+      [req.userId]
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    const { password, ...userWithoutPassword } = user as any;
+    res.json({ user: userWithoutPassword });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Upload de imagem de perfil (avatar ou capa)
+router.post(
+  '/me/upload-image',
+  authenticateToken,
+  upload.single('image'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.userId) {
+        return res.status(401).json({ error: 'Não autenticado' });
+      }
+
+      const file = (req as any).file;
+      if (!file) {
+        return res.status(400).json({ error: 'Nenhuma imagem fornecida' });
+      }
+
+      const type = (req.body?.type as string) || 'avatar';
+      const image = await imageService.uploadImage(
+        ImageEntityType.USER,
+        req.userId,
+        file,
+        true
+      );
+
+      const baseUrl = process.env.API_URL || 'https://giro-certo-api.onrender.com';
+      const imageUrl = `${baseUrl}/api/images/${image.id}`;
+
+      await query(
+        `UPDATE "User" SET "photoUrl" = $1, "updatedAt" = NOW() WHERE id = $2`,
+        [imageUrl, req.userId]
+      );
+
+      res.status(201).json({ url: imageUrl, imageUrl });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
 
 const handleUpdateUserType = async (req: AuthRequest, res: Response) => {
   try {
@@ -381,6 +517,68 @@ router.delete('/:userId', authenticateToken, requireAdmin, async (req: AuthReque
     });
 
     res.json({ message: 'Usuário excluído com sucesso', user });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Seguir utilizador (rede social)
+router.post('/:userId/follow', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const followerId = req.userId!;
+    const followingId = getParam(req.params.userId);
+
+    if (followerId === followingId) {
+      return res.status(400).json({ error: 'Não pode seguir a si mesmo' });
+    }
+
+    const exists = await queryOne<{ id: string }>(
+      'SELECT id FROM "User" WHERE id = $1',
+      [followingId]
+    );
+    if (!exists) {
+      return res.status(404).json({ error: 'Utilizador não encontrado' });
+    }
+
+    const followTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Follow') as exists`
+    );
+    if (!followTable?.exists) {
+      return res.status(501).json({ error: 'Tabela Follow não existe. Execute a migração migrate-follow-social.sql' });
+    }
+
+    const id = generateId();
+    await query(
+      `INSERT INTO "Follow" (id, "followerId", "followingId") VALUES ($1, $2, $3)
+       ON CONFLICT ("followerId", "followingId") DO NOTHING`,
+      [id, followerId, followingId]
+    );
+
+    res.status(201).json({ message: 'A seguir', followed: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Deixar de seguir
+router.delete('/:userId/follow', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const followerId = req.userId!;
+    const followingId = getParam(req.params.userId);
+
+    const followTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Follow') as exists`
+    );
+    if (!followTable?.exists) {
+      return res.status(501).json({ error: 'Tabela Follow não existe. Execute a migração migrate-follow-social.sql' });
+    }
+
+    await query(
+      `DELETE FROM "Follow" WHERE "followerId" = $1 AND "followingId" = $2`,
+      [followerId, followingId]
+    );
+
+    res.json({ message: 'Deixou de seguir', followed: false });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
