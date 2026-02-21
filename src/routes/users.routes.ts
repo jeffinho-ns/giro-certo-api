@@ -106,7 +106,7 @@ router.get('/search', authenticateToken, async (req: AuthRequest, res: Response)
   }
 });
 
-// Buscar usuário por ID
+// Buscar usuário por ID (com contagem de seguidores e seguindo)
 router.get('/:userId', authenticateToken, async (req: Request, res: Response) => {
   try {
     const userId = getParam(req.params.userId);
@@ -150,8 +150,76 @@ router.get('/:userId', authenticateToken, async (req: Request, res: Response) =>
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
+    let followersCount = 0;
+    let followingCount = 0;
+    const followTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Follow') as exists`
+    );
+    if (followTable?.exists) {
+      const fc = await queryOne<{ count: string }>(
+        `SELECT COUNT(*)::text as count FROM "Follow" WHERE "followingId" = $1`,
+        [userId]
+      );
+      const flc = await queryOne<{ count: string }>(
+        `SELECT COUNT(*)::text as count FROM "Follow" WHERE "followerId" = $1`,
+        [userId]
+      );
+      followersCount = parseInt(fc?.count || '0', 10);
+      followingCount = parseInt(flc?.count || '0', 10);
+    }
+
     const { password, ...userWithoutPassword } = user as any;
-    res.json({ user: userWithoutPassword });
+    res.json({
+      user: { ...userWithoutPassword, followersCount, followingCount },
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Listar seguidores de um utilizador
+router.get('/:userId/followers', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const targetUserId = getParam(req.params.userId);
+    const followTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Follow') as exists`
+    );
+    if (!followTable?.exists) {
+      return res.json({ followers: [] });
+    }
+    const rows = await query<{ id: string; name: string; photoUrl: string | null }>(
+      `SELECT u.id, u.name, u."photoUrl"
+       FROM "Follow" f
+       JOIN "User" u ON u.id = f."followerId"
+       WHERE f."followingId" = $1
+       ORDER BY f."createdAt" DESC`,
+      [targetUserId]
+    );
+    res.json({ followers: rows });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Listar quem um utilizador segue
+router.get('/:userId/following', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const targetUserId = getParam(req.params.userId);
+    const followTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Follow') as exists`
+    );
+    if (!followTable?.exists) {
+      return res.json({ following: [] });
+    }
+    const rows = await query<{ id: string; name: string; photoUrl: string | null }>(
+      `SELECT u.id, u.name, u."photoUrl"
+       FROM "Follow" f
+       JOIN "User" u ON u.id = f."followingId"
+       WHERE f."followerId" = $1
+       ORDER BY f."createdAt" DESC`,
+      [targetUserId]
+    );
+    res.json({ following: rows });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }

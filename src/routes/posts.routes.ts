@@ -93,10 +93,11 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 
     const postId = generateId();
 
+    const imgArray = Array.isArray(images) ? (images as string[]) : [];
     await query(
       `INSERT INTO "Post" (id, "userId", content, images, "likesCount", "commentsCount", "createdAt", "updatedAt")
        VALUES ($1, $2, $3, $4, 0, 0, NOW(), NOW())`,
-      [postId, req.userId, content, JSON.stringify(images || [])]
+      [postId, req.userId, content, imgArray.length > 0 ? imgArray : []]
     );
 
     const post = await queryOne<Post & { user: any }>(
