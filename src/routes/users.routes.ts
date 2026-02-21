@@ -1,6 +1,11 @@
 import { Router, Request, Response } from 'express';
+import path from 'path';
 import multer from 'multer';
 import { query, queryOne, transaction } from '../lib/db';
+import {
+  uploadBuffer,
+  buildObjectPath,
+} from '../services/firebase-storage.service';
 import { authenticateToken, AuthRequest, requireAdmin } from '../middleware/auth';
 import { UpdateUserLocationDto, User, Bike, Wallet, UserRole, UserType, PilotProfile } from '../types';
 import { ImageService } from '../services/image.service';
@@ -385,7 +390,7 @@ router.patch('/me/profile', authenticateToken, async (req: AuthRequest, res: Res
   }
 });
 
-// Upload de imagem de perfil (avatar ou capa)
+// Upload de imagem de perfil (avatar ou capa) - Firebase Storage ou fallback Image table
 router.post(
   '/me/upload-image',
   authenticateToken,
@@ -402,19 +407,37 @@ router.post(
       }
 
       const type = ((req.body?.type as string) || 'avatar').toLowerCase();
-      const image = await imageService.uploadImage(
-        ImageEntityType.USER,
-        req.userId,
-        file,
-        true
-      );
+      let imageUrl: string;
 
-      const baseUrl =
-        process.env.API_URL ||
-        (req.protocol && req.get('host')
-          ? `${req.protocol}://${req.get('host')}`
-          : 'https://giro-certo-api.onrender.com');
-      const imageUrl = `${baseUrl}/api/images/${image.id}`;
+      const useFirebase =
+        process.env.FIREBASE_STORAGE_BUCKET &&
+        (process.env.FIREBASE_ADMIN_PROJECT_ID ||
+          process.env.FIREBASE_ADMIN_CREDENTIALS_JSON_BASE64);
+
+      if (useFirebase) {
+        const ext = path.extname(file.originalname) || '.jpg';
+        const filename = `${generateId()}${ext}`;
+        const objectPath = buildObjectPath('profile', filename);
+        const result = await uploadBuffer({
+          objectPath,
+          buffer: file.buffer,
+          contentType: file.mimetype,
+        });
+        imageUrl = result.url;
+      } else {
+        const image = await imageService.uploadImage(
+          ImageEntityType.USER,
+          req.userId,
+          file,
+          true
+        );
+        const baseUrl =
+          process.env.API_URL ||
+          (req.protocol && req.get('host')
+            ? `${req.protocol}://${req.get('host')}`
+            : 'https://giro-certo-api.onrender.com');
+        imageUrl = `${baseUrl}/api/images/${image.id}`;
+      }
 
       if (type === 'cover') {
         await query(

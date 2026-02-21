@@ -1,11 +1,31 @@
 import { Router, Response } from 'express';
+import path from 'path';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { ImageService } from '../services/image.service';
+import {
+  uploadBuffer,
+  buildObjectPath,
+} from '../services/firebase-storage.service';
 import { ImageEntityType } from '../types';
+import { generateId } from '../utils/id';
 import multer from 'multer';
 
 const router = Router();
 const imageService = new ImageService();
+
+const FIREBASE_FOLDER: Record<string, string> = {
+  user: 'profile',
+  post: 'posts',
+  story: 'stories',
+};
+
+function isFirebaseConfigured(): boolean {
+  return !!(
+    process.env.FIREBASE_STORAGE_BUCKET &&
+    (process.env.FIREBASE_ADMIN_PROJECT_ID ||
+      process.env.FIREBASE_ADMIN_CREDENTIALS_JSON_BASE64)
+  );
+}
 
 // Configurar multer para processar uploads em memória
 const upload = multer({
@@ -23,7 +43,7 @@ const upload = multer({
   },
 });
 
-// Upload de imagem
+// Upload de imagem (Firebase Storage - pasta giro-certo)
 router.post(
   '/upload/:entityType/:entityId',
   authenticateToken,
@@ -37,14 +57,13 @@ router.post(
 
       const entityType = (Array.isArray(req.params.entityType) ? req.params.entityType[0] : req.params.entityType) as ImageEntityType;
       const entityId = Array.isArray(req.params.entityId) ? req.params.entityId[0] : req.params.entityId;
-      const isPrimary = req.body.isPrimary === 'true' || req.body.isPrimary === true;
 
       // Validar entityType
       if (!Object.values(ImageEntityType).includes(entityType)) {
         return res.status(400).json({ error: 'Tipo de entidade inválido' });
       }
 
-      // Verificar permissões (usuário só pode fazer upload para suas próprias entidades)
+      // Verificar permissões
       if (entityType === ImageEntityType.USER && entityId !== req.userId) {
         return res.status(403).json({ error: 'Sem permissão para fazer upload' });
       }
@@ -55,21 +74,51 @@ router.post(
         return res.status(403).json({ error: 'Sem permissão para fazer upload' });
       }
 
-      const image = await imageService.uploadImage(entityType, entityId, file, isPrimary);
+      if (isFirebaseConfigured()) {
+        const ext = path.extname(file.originalname) || '.jpg';
+        const filename = `${generateId()}${ext}`;
+        const subfolder = FIREBASE_FOLDER[entityType.toLowerCase()] || 'general';
+        const objectPath = buildObjectPath(subfolder, filename);
 
-      res.status(201).json({
-        image: {
-          id: image.id,
-          entityType: image.entityType,
-          entityId: image.entityId,
-          filename: image.filename,
-          mimetype: image.mimetype,
-          size: image.size,
-          isPrimary: image.isPrimary,
-          url: `/api/images/${image.id}`,
-          createdAt: image.createdAt,
-        },
-      });
+        const result = await uploadBuffer({
+          objectPath,
+          buffer: file.buffer,
+          contentType: file.mimetype,
+        });
+
+        res.status(201).json({
+          image: {
+            id: result.objectPath,
+            entityType,
+            entityId,
+            filename: file.originalname,
+            mimetype: file.mimetype,
+            size: file.size,
+            isPrimary: true,
+            url: result.url,
+            createdAt: new Date(),
+          },
+        });
+      } else {
+        const isPrimary = req.body.isPrimary === 'true' || req.body.isPrimary === true;
+        const image = await imageService.uploadImage(entityType, entityId, file, isPrimary);
+        const baseUrl = process.env.API_URL || 'https://giro-certo-api.onrender.com';
+        const imageUrl = `${baseUrl}/api/images/${image.id}`;
+
+        res.status(201).json({
+          image: {
+            id: image.id,
+            entityType: image.entityType,
+            entityId: image.entityId,
+            filename: image.filename,
+            mimetype: image.mimetype,
+            size: image.size,
+            isPrimary: image.isPrimary,
+            url: imageUrl,
+            createdAt: image.createdAt,
+          },
+        });
+      }
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
