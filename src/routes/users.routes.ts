@@ -421,6 +421,28 @@ router.get('/me/follow-requests/sent', authenticateToken, async (req: AuthReques
   }
 });
 
+// Listar IDs dos utilizadores que o utilizador logado segue (feed "Seguindo", perfil)
+router.get('/me/following', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const followerId = req.userId!;
+    const hasTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Follow') as exists`
+    );
+    if (!hasTable?.exists) {
+      return res.json({ followingIds: [] });
+    }
+
+    const rows = await query<{ followingId: string }>(
+      `SELECT "followingId" FROM "Follow" WHERE "followerId" = $1`,
+      [followerId]
+    );
+
+    res.json({ followingIds: rows.map((r) => r.followingId) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Aceitar pedido de seguimento (e opcionalmente seguir de volta)
 router.post('/me/follow-requests/:requestId/accept', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {

@@ -117,6 +117,7 @@ export enum ImageEntityType {
   PARTNER = 'partner',
   POST = 'post',
   PROMOTION = 'promotion',
+  STORY = 'story',
 }
 
 export enum UserRole {
@@ -382,6 +383,43 @@ export interface Post {
   commentsCount: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface Story {
+  id: string;
+  userId: string;
+  mediaUrl: string;
+  likeCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ChatConversation {
+  id: string;
+  participant1Id: string;
+  participant2Id: string;
+  lastMessageAt: Date | null;
+  lastMessagePreview: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ChatMessage {
+  id: string;
+  chatId: string;
+  senderId: string;
+  text: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface PostReport {
+  id: string;
+  postId: string;
+  reporterId: string;
+  reason: string;
+  status: 'pending' | 'reviewed' | 'resolved';
+  createdAt: Date;
 }
 
 export interface Image {

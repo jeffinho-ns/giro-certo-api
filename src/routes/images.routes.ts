@@ -48,6 +48,9 @@ router.post(
       if (entityType === ImageEntityType.USER && entityId !== req.userId) {
         return res.status(403).json({ error: 'Sem permissão para fazer upload' });
       }
+      if (entityType === ImageEntityType.STORY && entityId !== req.userId) {
+        return res.status(403).json({ error: 'Sem permissão para fazer upload' });
+      }
 
       const image = await imageService.uploadImage(entityType, entityId, file, isPrimary);
 
