@@ -38,7 +38,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       params
     );
 
-    const stories = rows.map((r) => ({
+    const stories = rows.map((r: any) => ({
       id: r.id,
       userId: r.userId,
       userName: r.userName,
@@ -46,6 +46,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       mediaUrl: r.mediaUrl,
       likeCount: r.likeCount ?? 0,
       createdAt: r.createdAt,
+      caption: r.caption ?? null,
     }));
 
     res.json({ stories });
@@ -66,10 +67,11 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return res.status(501).json({ error: 'Tabela Story não existe. Execute migrate-stories.sql' });
     }
 
-    const { mediaUrl } = req.body as { mediaUrl?: string };
+    const { mediaUrl, caption } = req.body as { mediaUrl?: string; caption?: string };
     if (!mediaUrl || typeof mediaUrl !== 'string') {
       return res.status(400).json({ error: 'mediaUrl é obrigatório' });
     }
+    const captionTrim = typeof caption === 'string' ? caption.trim() || null : null;
 
     const storyId = generateId();
     const user = await queryOne<{ name: string; photoUrl: string | null }>(
@@ -78,9 +80,9 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     );
 
     await query(
-      `INSERT INTO "Story" (id, "userId", "mediaUrl", "likeCount", "createdAt", "updatedAt")
-       VALUES ($1, $2, $3, 0, NOW(), NOW())`,
-      [storyId, req.userId, mediaUrl.trim()]
+      `INSERT INTO "Story" (id, "userId", "mediaUrl", "caption", "likeCount", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, 0, NOW(), NOW())`,
+      [storyId, req.userId, mediaUrl.trim(), captionTrim]
     );
 
     const story = {
@@ -89,6 +91,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       userName: user?.name ?? 'Utilizador',
       userAvatarUrl: user?.photoUrl ?? null,
       mediaUrl: mediaUrl.trim(),
+      caption: captionTrim,
       likeCount: 0,
       createdAt: new Date(),
     };

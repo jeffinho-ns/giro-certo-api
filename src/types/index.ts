@@ -389,6 +389,7 @@ export interface Story {
   id: string;
   userId: string;
   mediaUrl: string;
+  caption?: string | null;
   likeCount: number;
   createdAt: Date;
   updatedAt: Date;

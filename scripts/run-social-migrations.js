@@ -19,6 +19,7 @@ const pool = new Pool({
 
 const MIGRATIONS = [
   { name: 'Stories', file: 'migrate-stories.sql' },
+  { name: 'Stories caption', file: 'migrate-stories-add-caption.sql' },
   { name: 'Chat', file: 'migrate-chat.sql' },
   { name: 'Post Reports', file: 'migrate-post-reports.sql' },
 ];
