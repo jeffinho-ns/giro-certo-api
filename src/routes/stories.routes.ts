@@ -22,7 +22,10 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return res.json({ stories: [] });
     }
 
-    const whereClause = userId ? 'WHERE s."userId" = $2' : '';
+    // Stories expiram após 24 horas: só listar os das últimas 24h
+    const whereClause = userId
+      ? 'WHERE s."userId" = $2 AND s."createdAt" > NOW() - INTERVAL \'24 hours\''
+      : 'WHERE s."createdAt" > NOW() - INTERVAL \'24 hours\'';
     const params = userId ? [limit, userId] : [limit];
 
     const rows = await query<Story & { userName: string; userPhotoUrl: string | null }>(
