@@ -72,6 +72,11 @@ function init(): admin.app.App {
   return app;
 }
 
+/** Garantir que o Firebase Admin está inicializado (para uso por FCM, etc.). */
+export function ensureFirebaseApp(): admin.app.App {
+  return init();
+}
+
 function getBucket() {
   init();
   return admin.storage().bucket();

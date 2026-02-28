@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { query, queryOne } from '../lib/db';
 import { generateId } from '../utils/id';
+import { sendPushToUser } from '../services/fcm.service';
 
 const router = Router();
 
@@ -218,6 +219,25 @@ router.post('/:chatId/messages', authenticateToken, async (req: AuthRequest, res
       createdAt: new Date(),
       isFromMe: true,
     };
+
+    const otherUserId = conv.participant1Id === currentUserId ? conv.participant2Id : conv.participant1Id;
+    const io = (req as any).app?.get?.('io');
+    if (io?.to) {
+      const payload = {
+        chatId,
+        message: {
+          id: msgId,
+          senderId: currentUserId,
+          senderName: user?.name ?? 'Utilizador',
+          text: text.trim(),
+          createdAt: (message.createdAt as Date).toISOString(),
+          isFromMe: false,
+        },
+      };
+      io.to(`user:${otherUserId}`).emit('chat:message', payload);
+    }
+    const pushPreview = (user?.name ?? 'Alguém') + ': ' + text.trim().slice(0, 60) + (text.trim().length > 60 ? '...' : '');
+    await sendPushToUser(otherUserId, 'Nova mensagem', pushPreview, { type: 'chat', chatId });
 
     res.status(201).json({ message });
   } catch (error: any) {

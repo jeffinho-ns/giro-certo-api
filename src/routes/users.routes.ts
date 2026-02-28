@@ -10,6 +10,7 @@ import { authenticateToken, AuthRequest, requireAdmin } from '../middleware/auth
 import { UpdateUserLocationDto, User, Bike, Wallet, UserRole, UserType, PilotProfile } from '../types';
 import { ImageService } from '../services/image.service';
 import { AlertService, AlertType, AlertSeverity } from '../services/alert.service';
+import { registerFcmToken, sendPushToUser } from '../services/fcm.service';
 import { ImageEntityType } from '../types';
 import { generateId } from '../utils/id';
 
@@ -390,6 +391,21 @@ router.patch('/me/profile', authenticateToken, async (req: AuthRequest, res: Res
   }
 });
 
+// Registar token FCM para notificações push (telemóvel bloqueado)
+router.post('/me/fcm-token', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const { token } = (req.body as { token?: string }) || {};
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ error: 'token é obrigatório' });
+    }
+    await registerFcmToken(userId, token);
+    res.json({ ok: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Upload de imagem de perfil (avatar ou capa) - Firebase Storage ou fallback Image table
 router.post(
   '/me/upload-image',
@@ -587,6 +603,7 @@ router.post('/me/follow-requests/:requestId/accept', authenticateToken, async (r
     if (io?.to) {
       io.to(`user:${requesterId}`).emit('notification', { type: 'follow_request_accepted', targetName: targetUser?.name });
     }
+    await sendPushToUser(requesterId, 'Pedido aceite', `${targetUser?.name || 'Alguém'} aceitou o teu pedido de seguimento.`);
 
     res.json({ message: 'Pedido aceite', followBack });
   } catch (error: any) {
@@ -838,8 +855,14 @@ router.post('/:userId/follow-request', authenticateToken, async (req: AuthReques
 
     const io = (req as any).app?.get?.('io');
     if (io?.to) {
-      io.to(`user:${targetId}`).emit('notification', alert);
+      const payload = {
+        ...alert,
+        createdAt: (alert as any).createdAt instanceof Date ? (alert as any).createdAt.toISOString() : (alert as any).createdAt,
+        readAt: (alert as any).readAt instanceof Date ? (alert as any).readAt?.toISOString() : (alert as any).readAt,
+      };
+      io.to(`user:${targetId}`).emit('notification', payload);
     }
+    await sendPushToUser(targetId, 'Pedido de seguimento', `${requester?.name || 'Alguém'} quer seguir-te.`, { type: 'follow_request', alertId: (alert as any).id });
 
     res.status(201).json({ message: 'Pedido enviado', requestId: finalRequestId });
   } catch (error: any) {
