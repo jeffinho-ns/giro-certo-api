@@ -4,8 +4,11 @@ import { UserRole } from '../types';
 import { query, queryOne, transaction } from '../lib/db';
 import { Post } from '../types';
 import { generateId } from '../utils/id';
+import { AlertService, AlertType, AlertSeverity } from '../services/alert.service';
+import { sendPushToUser } from '../services/fcm.service';
 
 const router = Router();
+const alertService = new AlertService();
 
 // Listar posts da comunidade (opcional: filtrar por userId, ou apenas reportados para moderação)
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -145,6 +148,28 @@ router.post('/:postId/like', authenticateToken, async (req: AuthRequest, res: Re
       }
     });
 
+    // Notificar dono do post (se não for o próprio)
+    if (!existingLike) {
+      const post = await queryOne<{ userId: string }>('SELECT "userId" FROM "Post" WHERE id = $1', [postId]);
+      const actor = await queryOne<{ name: string }>('SELECT name FROM "User" WHERE id = $1', [req.userId]);
+      if (post && post.userId !== req.userId) {
+        const alert = await alertService.createAlert({
+          type: AlertType.POST_LIKE,
+          severity: AlertSeverity.LOW,
+          title: 'Nova curtida',
+          message: `${actor?.name || 'Alguém'} curtiu a tua publicação.`,
+          userId: post.userId,
+          metadata: { postId, actorId: req.userId },
+        });
+        const io = (req as any).app?.get?.('io');
+        if (io?.to) {
+          const payload = { ...alert, createdAt: (alert as any).createdAt instanceof Date ? (alert as any).createdAt.toISOString() : (alert as any).createdAt };
+          io.to(`user:${post.userId}`).emit('notification', payload);
+        }
+        await sendPushToUser(post.userId, 'Nova curtida', `${actor?.name || 'Alguém'} curtiu a tua publicação.`, { type: 'post_like', postId });
+      }
+    }
+
     res.json({ liked: !existingLike });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -180,18 +205,20 @@ router.post('/:postId/comments', authenticateToken, async (req: AuthRequest, res
     }
 
     const postId = Array.isArray(req.params.postId) ? req.params.postId[0] : req.params.postId;
-    const { content } = req.body;
+    const { content } = req.body as { content?: string };
+    const contentStr = typeof content === 'string' ? content.trim() : '';
 
-    if (!content) {
+    if (!contentStr) {
       return res.status(400).json({ error: 'Conteúdo é obrigatório' });
     }
 
+    const post = await queryOne<{ userId: string }>('SELECT "userId" FROM "Post" WHERE id = $1', [postId]);
     const commentId = generateId();
 
     await transaction(async (client) => {
       await client.query(
         'INSERT INTO "Comment" (id, "postId", "userId", content, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, NOW(), NOW())',
-        [commentId, postId, req.userId, content]
+        [commentId, postId, req.userId, contentStr]
       );
       await client.query('UPDATE "Post" SET "commentsCount" = "commentsCount" + 1 WHERE id = $1', [postId]);
     });
@@ -203,6 +230,26 @@ router.post('/:postId/comments', authenticateToken, async (req: AuthRequest, res
        WHERE c.id = $1`,
       [commentId]
     );
+
+    // Notificar dono do post (se não for o próprio)
+    if (post && post.userId !== req.userId) {
+      const actor = await queryOne<{ name: string }>('SELECT name FROM "User" WHERE id = $1', [req.userId]);
+      const preview = contentStr.slice(0, 50) + (contentStr.length > 50 ? '...' : '');
+      const alert = await alertService.createAlert({
+        type: AlertType.POST_COMMENT,
+        severity: AlertSeverity.LOW,
+        title: 'Novo comentário',
+        message: `${actor?.name || 'Alguém'} comentou: ${preview}`,
+        userId: post.userId,
+        metadata: { postId, commentId, actorId: req.userId },
+      });
+      const io = (req as any).app?.get?.('io');
+      if (io?.to) {
+        const payload = { ...alert, createdAt: (alert as any).createdAt instanceof Date ? (alert as any).createdAt.toISOString() : (alert as any).createdAt };
+        io.to(`user:${post.userId}`).emit('notification', payload);
+      }
+      await sendPushToUser(post.userId, 'Novo comentário', `${actor?.name || 'Alguém'} comentou na tua publicação.`, { type: 'post_comment', postId });
+    }
 
     res.status(201).json({ comment });
   } catch (error: any) {

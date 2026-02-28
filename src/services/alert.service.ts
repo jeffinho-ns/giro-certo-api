@@ -11,6 +11,8 @@ export enum AlertType {
   BROADCAST_BLITZ = 'BROADCAST_BLITZ',
   FOLLOW_REQUEST = 'FOLLOW_REQUEST',
   DELIVERY_APPROVED = 'DELIVERY_APPROVED',
+  POST_LIKE = 'POST_LIKE',
+  POST_COMMENT = 'POST_COMMENT',
 }
 
 export enum AlertSeverity {
@@ -421,6 +423,8 @@ export class AlertService {
       broadcastBlitz: string;
       followRequest: string;
       deliveryApproved: string;
+      postLike: string;
+      postComment: string;
       low: string;
       medium: string;
       high: string;
@@ -438,6 +442,8 @@ export class AlertService {
         COUNT(*) FILTER (WHERE type = 'BROADCAST_BLITZ') as "broadcastBlitz",
         COUNT(*) FILTER (WHERE type = 'FOLLOW_REQUEST') as "followRequest",
         COUNT(*) FILTER (WHERE type = 'DELIVERY_APPROVED') as "deliveryApproved",
+        COUNT(*) FILTER (WHERE type = 'POST_LIKE') as "postLike",
+        COUNT(*) FILTER (WHERE type = 'POST_COMMENT') as "postComment",
         COUNT(*) FILTER (WHERE severity = 'LOW') as low,
         COUNT(*) FILTER (WHERE severity = 'MEDIUM') as medium,
         COUNT(*) FILTER (WHERE severity = 'HIGH') as high,
@@ -460,6 +466,8 @@ export class AlertService {
         [AlertType.BROADCAST_BLITZ]: parseInt(stats?.broadcastBlitz || '0'),
         [AlertType.FOLLOW_REQUEST]: parseInt(stats?.followRequest || '0'),
         [AlertType.DELIVERY_APPROVED]: parseInt(stats?.deliveryApproved || '0'),
+        [AlertType.POST_LIKE]: parseInt(stats?.postLike || '0'),
+        [AlertType.POST_COMMENT]: parseInt(stats?.postComment || '0'),
       },
       bySeverity: {
         [AlertSeverity.LOW]: parseInt(stats?.low || '0'),

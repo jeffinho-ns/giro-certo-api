@@ -49,6 +49,21 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
   }
 });
 
+// Contagem de alertas não lidos (para badge)
+router.get('/me/unread-count', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+    const partnerId = req.user?.partnerId;
+    const filters: any = { isRead: false, limit: 1, offset: 0 };
+    if (partnerId) filters.partnerId = partnerId;
+    else if (userId) filters.userId = userId;
+    const result = await alertService.listAlerts(filters);
+    res.json({ count: result.total });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Listar alertas (apenas moderadores/admin)
 router.get('/', authenticateToken, requireModerator, async (req: Request, res: Response) => {
   try {
