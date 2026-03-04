@@ -10,12 +10,15 @@ import { sendPushToUser } from '../services/fcm.service';
 const router = Router();
 const alertService = new AlertService();
 
-// Listar posts da comunidade (opcional: filtrar por userId, ou apenas reportados para moderação)
+// Listar posts da comunidade (opcional: userId, pilotType=delivery|lazer, hashtag, postType, reportedOnly)
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
     const userId = (req.query.userId as string)?.trim() || null;
+    const pilotType = (req.query.pilotType as string)?.trim()?.toLowerCase() || null;
+    const hashtag = (req.query.hashtag as string)?.trim()?.replace(/^#/, '') || null;
+    const postType = (req.query.postType as string)?.trim()?.toUpperCase() || null;
     const reportedOnly = req.query.reported === 'true' || req.query.reported === '1';
 
     const conditions: string[] = [];
@@ -24,6 +27,19 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     if (userId) {
       conditions.push(`p."userId" = $${paramIdx++}`);
       params.push(userId);
+    }
+    if (pilotType === 'delivery') {
+      conditions.push(`u."pilotProfile" = 'TRABALHO'`);
+    } else if (pilotType === 'lazer') {
+      conditions.push(`(u."pilotProfile" IS NULL OR u."pilotProfile" != 'TRABALHO')`);
+    }
+    if (hashtag) {
+      conditions.push(`p."hashtags" @> ARRAY[$${paramIdx++}]`);
+      params.push(hashtag);
+    }
+    if (postType) {
+      conditions.push(`COALESCE(p."postType", 'NORMAL') = $${paramIdx++}`);
+      params.push(postType);
     }
     let hasReportTable = false;
     if (reportedOnly) {
@@ -42,11 +58,22 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
          FROM "PostReport" pr WHERE pr."postId" = p.id AND pr.status = 'pending') as "reportInfo",
         ` : '';
 
-    const posts = await query<Post & { user: any; likes: any[]; comments: any[]; reportInfo?: any }>(
+    const hasReactionsTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'PostReaction') as exists`
+    );
+    const reactionsSubquery = hasReactionsTable?.exists
+      ? `, (SELECT json_object_agg(pr."reactionType", pr.cnt) FROM (
+          SELECT "reactionType", COUNT(*)::int as cnt FROM "PostReaction" WHERE "postId" = p.id GROUP BY "reactionType"
+        ) pr) as reactions`
+      : '';
+
+    const posts = await query<Post & { user: any; likes: any[]; comments: any[]; reportInfo?: any; reactions?: any }>(
       `SELECT 
-        p.*,
+        p.id, p."userId", p.content, p.images, p."likesCount", p."commentsCount", p."createdAt", p."updatedAt",
+        COALESCE(p."postType", 'NORMAL') as "postType",
+        COALESCE(p."hashtags", '{}') as hashtags,
         ${selectReportInfo}
-        json_build_object('id', u.id, 'name', u.name, 'photoUrl', u."photoUrl") as user,
+        json_build_object('id', u.id, 'name', u.name, 'photoUrl', u."photoUrl", 'pilotProfile', u."pilotProfile") as user,
         COALESCE(
           json_agg(DISTINCT jsonb_build_object('userId', pl."userId")) 
           FILTER (WHERE pl.id IS NOT NULL),
@@ -63,6 +90,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
           ) FILTER (WHERE c.id IS NOT NULL),
           '[]'::json
         ) as comments
+        ${reactionsSubquery}
        FROM "Post" p
        LEFT JOIN "User" u ON u.id = p."userId"
        LEFT JOIN "PostLike" pl ON pl."postId" = p.id
@@ -88,23 +116,25 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const { content, images } = req.body;
+    const { content, images, postType, hashtags } = req.body;
 
     if (!content) {
       return res.status(400).json({ error: 'Conteúdo é obrigatório' });
     }
 
     const postId = generateId();
-
     const imgArray = Array.isArray(images) ? (images as string[]) : [];
+    const typeStr = (typeof postType === 'string' && postType.trim()) ? postType.trim().toUpperCase() : 'NORMAL';
+    const hashtagArray = Array.isArray(hashtags) ? (hashtags as string[]).filter((h: any) => typeof h === 'string' && h.trim()) : [];
+
     await query(
-      `INSERT INTO "Post" (id, "userId", content, images, "likesCount", "commentsCount", "createdAt", "updatedAt")
-       VALUES ($1, $2, $3, $4, 0, 0, NOW(), NOW())`,
-      [postId, req.userId, content, imgArray.length > 0 ? imgArray : []]
+      `INSERT INTO "Post" (id, "userId", content, images, "likesCount", "commentsCount", "postType", "hashtags", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, 0, 0, $5, $6, NOW(), NOW())`,
+      [postId, req.userId, content, imgArray.length > 0 ? imgArray : [], typeStr, hashtagArray]
     );
 
     const post = await queryOne<Post & { user: any }>(
-      `SELECT p.*, json_build_object('id', u.id, 'name', u.name, 'photoUrl', u."photoUrl") as user
+      `SELECT p.*, json_build_object('id', u.id, 'name', u.name, 'photoUrl', u."photoUrl", 'pilotProfile', u."pilotProfile") as user
        FROM "Post" p
        LEFT JOIN "User" u ON u.id = p."userId"
        WHERE p.id = $1`,
@@ -112,6 +142,68 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     );
 
     res.status(201).json({ post });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Reação num post (LIKE, BOA_ROTA, BOA_DICA). LIKE continua a usar PostLike; aqui só BOA_ROTA e BOA_DICA ou toggle LIKE em PostReaction.
+router.post('/:postId/reactions', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+
+    const postId = Array.isArray(req.params.postId) ? req.params.postId[0] : req.params.postId;
+    const reactionType = ((req.body as { reaction?: string })?.reaction || 'LIKE').trim().toUpperCase();
+    if (!['LIKE', 'BOA_ROTA', 'BOA_DICA'].includes(reactionType)) {
+      return res.status(400).json({ error: 'reaction deve ser LIKE, BOA_ROTA ou BOA_DICA' });
+    }
+
+    const hasTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'PostReaction') as exists`
+    );
+    if (!hasTable?.exists) {
+      const post = await queryOne<{ likesCount: number }>('SELECT "likesCount" FROM "Post" WHERE id = $1', [postId]);
+      return res.json({ likesCount: post?.likesCount ?? 0 });
+    }
+
+    const existing = await queryOne<{ id: string; reactionType: string }>(
+      'SELECT id, "reactionType" FROM "PostReaction" WHERE "postId" = $1 AND "userId" = $2',
+      [postId, req.userId]
+    );
+
+    await transaction(async (client: any) => {
+      if (existing) {
+        if (existing.reactionType === reactionType) {
+          await client.query('DELETE FROM "PostReaction" WHERE id = $1', [existing.id]);
+        } else {
+          await client.query('UPDATE "PostReaction" SET "reactionType" = $1 WHERE id = $2', [reactionType, existing.id]);
+        }
+      } else {
+        const rid = generateId();
+        await client.query(
+          'INSERT INTO "PostReaction" (id, "postId", "userId", "reactionType") VALUES ($1, $2, $3, $4)',
+          [rid, postId, req.userId, reactionType]
+        );
+      }
+    });
+
+    const counts = await queryOne<{ like_count: string; boa_rota: string; boa_dica: string }>(
+      `SELECT
+        (SELECT COUNT(*)::text FROM "PostLike" WHERE "postId" = $1) as like_count,
+        (SELECT COUNT(*)::text FROM "PostReaction" WHERE "postId" = $1 AND "reactionType" = 'BOA_ROTA') as boa_rota,
+        (SELECT COUNT(*)::text FROM "PostReaction" WHERE "postId" = $1 AND "reactionType" = 'BOA_DICA') as boa_dica`,
+      [postId]
+    );
+    const likesCount = parseInt(counts?.like_count ?? '0', 10);
+    res.json({
+      liked: false,
+      likesCount,
+      reactions: {
+        LIKE: likesCount,
+        BOA_ROTA: parseInt(counts?.boa_rota ?? '0', 10),
+        BOA_DICA: parseInt(counts?.boa_dica ?? '0', 10),
+      },
+    });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }

@@ -47,6 +47,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       likeCount: r.likeCount ?? 0,
       createdAt: r.createdAt,
       caption: r.caption ?? null,
+      template: r.template ?? 'NORMAL',
     }));
 
     res.json({ stories });
@@ -67,11 +68,14 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return res.status(501).json({ error: 'Tabela Story não existe. Execute migrate-stories.sql' });
     }
 
-    const { mediaUrl, caption } = req.body as { mediaUrl?: string; caption?: string };
+    const { mediaUrl, caption, template } = req.body as { mediaUrl?: string; caption?: string; template?: string };
     if (!mediaUrl || typeof mediaUrl !== 'string') {
       return res.status(400).json({ error: 'mediaUrl é obrigatório' });
     }
     const captionTrim = typeof caption === 'string' ? caption.trim() || null : null;
+    const templateStr = (typeof template === 'string' && template.trim()) ? template.trim().toUpperCase() : 'NORMAL';
+    const validTemplates = ['NORMAL', 'EM_ENTREGA', 'ROTA_DO_DIA'];
+    const finalTemplate = validTemplates.includes(templateStr) ? templateStr : 'NORMAL';
 
     const storyId = generateId();
     const user = await queryOne<{ name: string; photoUrl: string | null }>(
@@ -79,11 +83,22 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       [req.userId]
     );
 
-    await query(
-      `INSERT INTO "Story" (id, "userId", "mediaUrl", "caption", "likeCount", "createdAt", "updatedAt")
-       VALUES ($1, $2, $3, $4, 0, NOW(), NOW())`,
-      [storyId, req.userId, mediaUrl.trim(), captionTrim]
+    const hasTemplateCol = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'Story' AND column_name = 'template') as exists`
     );
+    if (hasTemplateCol?.exists) {
+      await query(
+        `INSERT INTO "Story" (id, "userId", "mediaUrl", "caption", "template", "likeCount", "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, 0, NOW(), NOW())`,
+        [storyId, req.userId, mediaUrl.trim(), captionTrim, finalTemplate]
+      );
+    } else {
+      await query(
+        `INSERT INTO "Story" (id, "userId", "mediaUrl", "caption", "likeCount", "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, 0, NOW(), NOW())`,
+        [storyId, req.userId, mediaUrl.trim(), captionTrim]
+      );
+    }
 
     const story = {
       id: storyId,
@@ -92,6 +107,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       userAvatarUrl: user?.photoUrl ?? null,
       mediaUrl: mediaUrl.trim(),
       caption: captionTrim,
+      template: finalTemplate,
       likeCount: 0,
       createdAt: new Date(),
     };

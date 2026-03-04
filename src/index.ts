@@ -23,6 +23,8 @@ import partnersRoutes from './routes/partners.routes';
 import disputesRoutes from './routes/disputes.routes';
 import reportsRoutes from './routes/reports.routes';
 import alertsRoutes from './routes/alerts.routes';
+import socialRoutes from './routes/social.routes';
+import communitiesRoutes from './routes/communities.routes';
 
 dotenv.config();
 
@@ -85,6 +87,8 @@ app.use('/api/partners', partnersRoutes);
 app.use('/api/disputes', disputesRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/alerts', alertsRoutes);
+app.use('/api/social', socialRoutes);
+app.use('/api/communities', communitiesRoutes);
 
 // Error handler
 app.use(errorHandler);

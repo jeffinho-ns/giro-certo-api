@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { PartnerService } from '../services/partner.service';
 import { authenticateToken, AuthRequest, requireAdmin, requireModerator } from '../middleware/auth';
-import { queryOne } from '../lib/db';
+import { query, queryOne } from '../lib/db';
 import {
   CreatePartnerDto,
   UpdatePartnerDto,
@@ -55,6 +55,35 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
     }
 
     res.json({ partner });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Feed "Minha loja" — posts que mencionam a loja (hashtag ou conteúdo). Para lojista.
+router.get('/:partnerId/feed', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const partnerId = Array.isArray(req.params.partnerId) ? req.params.partnerId[0] : req.params.partnerId;
+    const limit = Math.min(parseInt(req.query.limit as string, 10) || 30, 50);
+    const hasColumn = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'Post' AND column_name = 'hashtags'
+      ) as exists`
+    );
+    if (!hasColumn?.exists) {
+      return res.json({ posts: [] });
+    }
+    const posts = await query<any>(
+      `SELECT p.*, json_build_object('id', u.id, 'name', u.name, 'photoUrl', u."photoUrl", 'pilotProfile', u."pilotProfile") as user
+       FROM "Post" p
+       LEFT JOIN "User" u ON u.id = p."userId"
+       WHERE p."hashtags" @> ARRAY[$2] OR p.content ILIKE $3
+       ORDER BY p."createdAt" DESC
+       LIMIT $1`,
+      [limit, `partner_${partnerId}`, `%${partnerId}%`]
+    );
+    res.json({ posts: posts || [] });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }

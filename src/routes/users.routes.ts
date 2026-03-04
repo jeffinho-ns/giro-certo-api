@@ -112,6 +112,38 @@ router.get('/search', authenticateToken, async (req: AuthRequest, res: Response)
   }
 });
 
+// Conquistas de um utilizador
+router.get('/:userId/achievements', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = getParam(req.params.userId);
+    const hasTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'UserAchievement') as exists`
+    );
+    if (!hasTable?.exists) {
+      return res.json({ achievements: [] });
+    }
+    const list = await query<{ id: string; name: string; description: string | null; iconName: string | null; unlockedAt: Date }>(
+      `SELECT a.id, a.name, a.description, a."iconName", ua."unlockedAt"
+       FROM "UserAchievement" ua
+       JOIN "Achievement" a ON a.id = ua."achievementId"
+       WHERE ua."userId" = $1
+       ORDER BY ua."unlockedAt" DESC`,
+      [userId]
+    );
+    res.json({
+      achievements: list.map((a) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        iconName: a.iconName,
+        unlockedAt: a.unlockedAt,
+      })),
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Buscar usuário por ID (com contagem de seguidores e seguindo)
 router.get('/:userId', authenticateToken, async (req: Request, res: Response) => {
   try {
@@ -523,6 +555,84 @@ router.get('/me/follow-requests/sent', authenticateToken, async (req: AuthReques
     );
 
     res.json({ targetIds: rows.map((r) => r.targetId) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Visibilidade no mapa (mostrar como piloto perto / entregador ativo)
+router.get('/me/map-visibility', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+    const hasCol = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'User' AND column_name = 'showOnMap') as exists`
+    );
+    if (!hasCol?.exists) {
+      return res.json({ showOnMap: false, showAsDelivery: false });
+    }
+    const row = await queryOne<{ showOnMap: boolean; showAsDelivery: boolean }>(
+      `SELECT COALESCE("showOnMap", false) as "showOnMap", COALESCE("showAsDelivery", false) as "showAsDelivery"
+       FROM "User" WHERE id = $1`,
+      [req.userId]
+    );
+    if (!row) return res.status(404).json({ error: 'Utilizador não encontrado' });
+    res.json({ showOnMap: row.showOnMap, showAsDelivery: row.showAsDelivery });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.put('/me/map-visibility', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+    const hasCol = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'User' AND column_name = 'showOnMap') as exists`
+    );
+    if (!hasCol?.exists) {
+      return res.json({ message: 'Visibilidade não disponível. Execute a migração migrate-social-rich.sql' });
+    }
+    const { showOnMap, showAsDelivery } = req.body as { showOnMap?: boolean; showAsDelivery?: boolean };
+    const updates: string[] = [];
+    const values: any[] = [];
+    let pos = 1;
+    if (typeof showOnMap === 'boolean') {
+      updates.push(`"showOnMap" = $${pos++}`);
+      values.push(showOnMap);
+    }
+    if (typeof showAsDelivery === 'boolean') {
+      updates.push(`"showAsDelivery" = $${pos++}`);
+      values.push(showAsDelivery);
+    }
+    if (updates.length === 0) return res.status(400).json({ error: 'Nenhum campo válido' });
+    values.push(req.userId);
+    await query(`UPDATE "User" SET ${updates.join(', ')}, "updatedAt" = NOW() WHERE id = $${pos}`, values);
+    res.json({ message: 'Visibilidade atualizada' });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Sugestões "quem seguir" (entregadores na zona, quem não segue ainda)
+router.get('/me/suggested-follows', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+    const limit = Math.min(parseInt(req.query.limit as string, 10) || 10, 50);
+    const followExists = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Follow') as exists`
+    );
+    const followSubquery = followExists?.exists
+      ? `AND NOT EXISTS (SELECT 1 FROM "Follow" f WHERE f."followerId" = $1 AND f."followingId" = u.id)`
+      : '';
+    const users = await query<User>(
+      `SELECT u.id, u.name, u."photoUrl", u."pilotProfile", u."createdAt"
+       FROM "User" u
+       WHERE u.id != $1 AND u."partnerId" IS NULL
+       ${followSubquery}
+       ORDER BY u."createdAt" DESC
+       LIMIT $2`,
+      followExists?.exists ? [req.userId, limit] : [req.userId, limit]
+    );
+    res.json({ suggestions: users, users });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
