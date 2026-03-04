@@ -53,6 +53,10 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     }
     const whereClause = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
+    const hasReactionsTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'PostReaction') as exists`
+    );
+
     // Reação do utilizador autenticado (PostReaction ou PostLike)
     params.push(req.userId ?? '');
     const currentUserParam = params.length;
@@ -66,9 +70,6 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
          FROM "PostReport" pr WHERE pr."postId" = p.id AND pr.status = 'pending') as "reportInfo",
         ` : '';
 
-    const hasReactionsTable = await queryOne<{ exists: boolean }>(
-      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'PostReaction') as exists`
-    );
     const reactionsSubquery = hasReactionsTable?.exists
       ? `, (SELECT json_object_agg(pr."reactionType", pr.cnt) FROM (
           SELECT "reactionType", COUNT(*)::int as cnt FROM "PostReaction" WHERE "postId" = p.id GROUP BY "reactionType"
