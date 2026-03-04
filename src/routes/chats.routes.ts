@@ -9,6 +9,28 @@ const router = Router();
 const getParam = (v: string | string[] | undefined): string =>
   Array.isArray(v) ? v[0] || '' : v || '';
 
+// Garante tabelas auxiliares para ocultar/silenciar conversas
+async function ensureChatExtrasTables() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS "ChatConversationHidden" (
+      id TEXT PRIMARY KEY,
+      "chatId" TEXT NOT NULL REFERENCES "ChatConversation"(id) ON DELETE CASCADE,
+      "userId" TEXT NOT NULL REFERENCES "User"(id) ON DELETE CASCADE,
+      "hiddenAt" TIMESTAMP DEFAULT NOW(),
+      UNIQUE("chatId", "userId")
+    );
+    CREATE TABLE IF NOT EXISTS "ChatMute" (
+      id TEXT PRIMARY KEY,
+      "chatId" TEXT NOT NULL REFERENCES "ChatConversation"(id) ON DELETE CASCADE,
+      "userId" TEXT NOT NULL REFERENCES "User"(id) ON DELETE CASCADE,
+      muted BOOLEAN DEFAULT true,
+      "createdAt" TIMESTAMP DEFAULT NOW(),
+      "updatedAt" TIMESTAMP DEFAULT NOW(),
+      UNIQUE("chatId", "userId")
+    );
+  `);
+}
+
 // Listar conversas privadas do utilizador
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
@@ -16,6 +38,8 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ChatConversation') as exists`
     );
     if (!hasTable?.exists) return res.json({ conversations: [] });
+
+    await ensureChatExtrasTables();
 
     const userId = req.userId!;
     const rows = await query<{
@@ -33,7 +57,11 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
               u.name as "otherName", u."photoUrl" as "otherPhotoUrl"
        FROM "ChatConversation" c
        JOIN "User" u ON u.id = CASE WHEN c."participant1Id" = $1 THEN c."participant2Id" ELSE c."participant1Id" END
-       WHERE c."participant1Id" = $1 OR c."participant2Id" = $1
+       WHERE (c."participant1Id" = $1 OR c."participant2Id" = $1)
+         AND NOT EXISTS (
+           SELECT 1 FROM "ChatConversationHidden" h
+           WHERE h."chatId" = c.id AND h."userId" = $1
+         )
        ORDER BY c."lastMessageAt" DESC NULLS LAST`,
       [userId]
     );
@@ -119,6 +147,83 @@ router.post('/private', authenticateToken, async (req: AuthRequest, res: Respons
         imageUrlOrUserId: recipientId,
       },
     });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Detalhes da conversa (participantes, estado de mute)
+router.get('/:chatId/settings', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const chatId = getParam(req.params.chatId);
+    const currentUserId = req.userId!;
+
+    const conv = await queryOne<{ participant1Id: string; participant2Id: string }>(
+      'SELECT "participant1Id", "participant2Id" FROM "ChatConversation" WHERE id = $1',
+      [chatId]
+    );
+    if (!conv) return res.status(404).json({ error: 'Conversa não encontrada' });
+    if (conv.participant1Id !== currentUserId && conv.participant2Id !== currentUserId) {
+      return res.status(403).json({ error: 'Sem acesso a esta conversa' });
+    }
+
+    await ensureChatExtrasTables();
+
+    const participants = await query<{ id: string; name: string; photoUrl: string | null }>(
+      'SELECT id, name, "photoUrl" FROM "User" WHERE id = ANY($1)',
+      [[conv.participant1Id, conv.participant2Id]]
+    );
+
+    const mute = await queryOne<{ muted: boolean }>(
+      'SELECT muted FROM "ChatMute" WHERE "chatId" = $1 AND "userId" = $2',
+      [chatId, currentUserId]
+    );
+
+    res.json({
+      chat: {
+        id: chatId,
+        isGroup: false,
+      },
+      participants: participants.map((p) => ({
+        id: p.id,
+        name: p.name,
+        photoUrl: p.photoUrl,
+      })),
+      muted: mute?.muted ?? false,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Atualizar mute da conversa para o utilizador atual
+router.put('/:chatId/mute', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const chatId = getParam(req.params.chatId);
+    const currentUserId = req.userId!;
+    const { muted } = req.body as { muted?: boolean };
+
+    const conv = await queryOne<{ participant1Id: string; participant2Id: string }>(
+      'SELECT "participant1Id", "participant2Id" FROM "ChatConversation" WHERE id = $1',
+      [chatId]
+    );
+    if (!conv) return res.status(404).json({ error: 'Conversa não encontrada' });
+    if (conv.participant1Id !== currentUserId && conv.participant2Id !== currentUserId) {
+      return res.status(403).json({ error: 'Sem acesso a esta conversa' });
+    }
+
+    await ensureChatExtrasTables();
+
+    const value = muted === true;
+    await query(
+      `INSERT INTO "ChatMute" (id, "chatId", "userId", muted, "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, NOW(), NOW())
+       ON CONFLICT ("chatId", "userId")
+       DO UPDATE SET muted = EXCLUDED.muted, "updatedAt" = NOW()`,
+      [generateId(), chatId, currentUserId, value]
+    );
+
+    res.json({ muted: value });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -221,6 +326,14 @@ router.post('/:chatId/messages', authenticateToken, async (req: AuthRequest, res
     };
 
     const otherUserId = conv.participant1Id === currentUserId ? conv.participant2Id : conv.participant1Id;
+
+    await ensureChatExtrasTables();
+
+    const mute = await queryOne<{ muted: boolean }>(
+      'SELECT muted FROM "ChatMute" WHERE "chatId" = $1 AND "userId" = $2',
+      [chatId, otherUserId]
+    );
+
     const io = (req as any).app?.get?.('io');
     if (io?.to) {
       const payload = {
@@ -236,10 +349,47 @@ router.post('/:chatId/messages', authenticateToken, async (req: AuthRequest, res
       };
       io.to(`user:${otherUserId}`).emit('chat:message', payload);
     }
-    const pushPreview = (user?.name ?? 'Alguém') + ': ' + text.trim().slice(0, 60) + (text.trim().length > 60 ? '...' : '');
-    await sendPushToUser(otherUserId, 'Nova mensagem', pushPreview, { type: 'chat', chatId });
+    if (!mute?.muted) {
+      const pushPreview =
+        (user?.name ?? 'Alguém') +
+        ': ' +
+        text.trim().slice(0, 60) +
+        (text.trim().length > 60 ? '...' : '');
+      await sendPushToUser(otherUserId, 'Nova mensagem', pushPreview, { type: 'chat', chatId });
+    }
 
     res.status(201).json({ message });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Excluir/ocultar conversa para o utilizador atual
+router.delete('/:chatId', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const chatId = getParam(req.params.chatId);
+    const currentUserId = req.userId!;
+
+    const conv = await queryOne<{ participant1Id: string; participant2Id: string }>(
+      'SELECT "participant1Id", "participant2Id" FROM "ChatConversation" WHERE id = $1',
+      [chatId]
+    );
+    if (!conv) return res.status(404).json({ error: 'Conversa não encontrada' });
+    if (conv.participant1Id !== currentUserId && conv.participant2Id !== currentUserId) {
+      return res.status(403).json({ error: 'Sem acesso a esta conversa' });
+    }
+
+    await ensureChatExtrasTables();
+
+    await query(
+      `INSERT INTO "ChatConversationHidden" (id, "chatId", "userId", "hiddenAt")
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT ("chatId", "userId")
+       DO UPDATE SET "hiddenAt" = NOW()`,
+      [generateId(), chatId, currentUserId]
+    );
+
+    res.json({ message: 'Conversa excluída para o utilizador atual.' });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
