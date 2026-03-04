@@ -53,6 +53,14 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     }
     const whereClause = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
+    // Reação do utilizador autenticado (PostReaction ou PostLike)
+    params.push(req.userId ?? '');
+    const currentUserParam = params.length;
+    const userReactionSelect = hasReactionsTable?.exists
+      ? `, (SELECT pr."reactionType" FROM "PostReaction" pr WHERE pr."postId" = p.id AND pr."userId" = $${currentUserParam} LIMIT 1) as "userReactionPr",
+         (SELECT 1 FROM "PostLike" pl2 WHERE pl2."postId" = p.id AND pl2."userId" = $${currentUserParam} LIMIT 1) as "userLiked"`
+      : `, (SELECT 1 FROM "PostLike" pl2 WHERE pl2."postId" = p.id AND pl2."userId" = $${currentUserParam} LIMIT 1) as "userLiked"`;
+
     const selectReportInfo = reportedOnly && hasReportTable ? `
         (SELECT json_agg(json_build_object('reason', pr.reason, 'createdAt', pr."createdAt"))
          FROM "PostReport" pr WHERE pr."postId" = p.id AND pr.status = 'pending') as "reportInfo",
@@ -91,6 +99,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
           '[]'::json
         ) as comments
         ${reactionsSubquery}
+        ${userReactionSelect}
        FROM "Post" p
        LEFT JOIN "User" u ON u.id = p."userId"
        LEFT JOIN "PostLike" pl ON pl."postId" = p.id
@@ -103,7 +112,15 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       params
     );
 
-    res.json({ posts });
+    const postsWithReaction = posts.map((p: any) => {
+      const { userReactionPr, userLiked, ...rest } = p;
+      return {
+        ...rest,
+        userReaction: userReactionPr ?? (userLiked ? 'LIKE' : null),
+      };
+    });
+
+    res.json({ posts: postsWithReaction });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -132,6 +149,29 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
        VALUES ($1, $2, $3, $4, 0, 0, $5, $6, NOW(), NOW())`,
       [postId, req.userId, content, imgArray.length > 0 ? imgArray : [], typeStr, hashtagArray]
     );
+
+    // Desbloquear conquista "Primeiro post" se for o primeiro do utilizador
+    const postCount = await queryOne<{ n: string }>(
+      'SELECT COUNT(*)::text as n FROM "Post" WHERE "userId" = $1',
+      [req.userId]
+    );
+    if (postCount && parseInt(postCount.n, 10) === 1) {
+      const hasAchievement = await queryOne<{ exists: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'UserAchievement') as exists`
+      );
+      if (hasAchievement?.exists) {
+        const existing = await queryOne<{ id: string }>(
+          'SELECT id FROM "UserAchievement" WHERE "userId" = $1 AND "achievementId" = $2',
+          [req.userId, 'ach_first_post']
+        );
+        if (!existing) {
+          await query(
+            'INSERT INTO "UserAchievement" (id, "userId", "achievementId") VALUES ($1, $2, $3)',
+            [generateId(), req.userId, 'ach_first_post']
+          );
+        }
+      }
+    }
 
     const post = await queryOne<Post & { user: any }>(
       `SELECT p.*, json_build_object('id', u.id, 'name', u.name, 'photoUrl', u."photoUrl", 'pilotProfile', u."pilotProfile") as user
@@ -194,9 +234,19 @@ router.post('/:postId/reactions', authenticateToken, async (req: AuthRequest, re
         (SELECT COUNT(*)::text FROM "PostReaction" WHERE "postId" = $1 AND "reactionType" = 'BOA_DICA') as boa_dica`,
       [postId]
     );
+    const userReactionRow = await queryOne<{ reactionType: string } | null>(
+      'SELECT "reactionType" FROM "PostReaction" WHERE "postId" = $1 AND "userId" = $2 LIMIT 1',
+      [postId, req.userId]
+    );
+    const userLiked = await queryOne<{ id: string } | null>(
+      'SELECT id FROM "PostLike" WHERE "postId" = $1 AND "userId" = $2 LIMIT 1',
+      [postId, req.userId]
+    );
     const likesCount = parseInt(counts?.like_count ?? '0', 10);
+    const userReaction = userReactionRow?.reactionType ?? (userLiked ? 'LIKE' : null);
     res.json({
-      liked: false,
+      liked: userReaction === 'LIKE' || !!userLiked,
+      userReaction,
       likesCount,
       reactions: {
         LIKE: likesCount,
