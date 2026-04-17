@@ -75,8 +75,8 @@ router.get('/stats', authenticateToken, requireModerator, async (req: AuthReques
         [today]
       ),
       queryOne<{ count: string }>(
-        'SELECT COUNT(*) as count FROM "DeliveryOrder" WHERE status = $1',
-        [DeliveryStatus.inProgress]
+        'SELECT COUNT(*) as count FROM "DeliveryOrder" WHERE status IN ($1, $2)',
+        [DeliveryStatus.inTransit, DeliveryStatus.inProgress]
       ),
       queryOne<{ count: string }>(
         'SELECT COUNT(*) as count FROM "DeliveryOrder" WHERE status = $1',
@@ -255,10 +255,18 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
           ),
           0
         )::numeric as "averageRating",
-        COUNT(DISTINCT CASE WHEN "do".status IN ('accepted', 'inProgress') THEN "do".id END) as "activeOrders"
+        COUNT(DISTINCT CASE WHEN "do".status IN ('accepted', 'arrivedAtStore', 'inTransit', 'inProgress') THEN "do".id END) as "activeOrders",
+        (
+          SELECT do2.status
+          FROM "DeliveryOrder" do2
+          WHERE do2."riderId" = u.id
+            AND do2.status IN ('accepted', 'arrivedAtStore', 'inTransit', 'inProgress')
+          ORDER BY do2."createdAt" DESC
+          LIMIT 1
+        ) as "currentOrderStatus"
        FROM "User" u
        ${bikeJoinClause}
-       LEFT JOIN "DeliveryOrder" "do" ON "do"."riderId" = u.id AND "do".status IN ('accepted', 'inProgress')
+       LEFT JOIN "DeliveryOrder" "do" ON "do"."riderId" = u.id AND "do".status IN ('accepted', 'arrivedAtStore', 'inTransit', 'inProgress')
        ${whereClause}
        GROUP BY u.id
        ORDER BY u."verificationBadge" DESC, u."isSubscriber" DESC, u."createdAt" DESC`,

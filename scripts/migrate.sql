@@ -7,7 +7,7 @@ CREATE TYPE "PilotProfile" AS ENUM ('FIM_DE_SEMANA', 'URBANO', 'TRABALHO', 'PIST
 CREATE TYPE "MaintenanceCategory" AS ENUM ('OLEO', 'PNEUS', 'TRAVOES', 'FILTROS', 'TRANSMISSAO');
 CREATE TYPE "MaintenanceStatus" AS ENUM ('OK', 'ATENCAO', 'CRITICO');
 CREATE TYPE "PartnerType" AS ENUM ('STORE', 'MECHANIC');
-CREATE TYPE "DeliveryStatus" AS ENUM ('pending', 'accepted', 'inProgress', 'completed', 'cancelled');
+CREATE TYPE "DeliveryStatus" AS ENUM ('pending', 'accepted', 'arrivedAtStore', 'inTransit', 'inProgress', 'completed', 'cancelled');
 CREATE TYPE "DeliveryPriority" AS ENUM ('low', 'normal', 'high', 'urgent');
 CREATE TYPE "TransactionType" AS ENUM ('COMMISSION', 'WITHDRAWAL', 'BONUS', 'REFUND');
 CREATE TYPE "TransactionStatus" AS ENUM ('pending', 'completed', 'failed', 'cancelled');
@@ -124,6 +124,8 @@ CREATE TABLE "DeliveryOrder" (
   "estimatedTime" INTEGER,
   "createdAt" TIMESTAMP DEFAULT NOW(),
   "acceptedAt" TIMESTAMP,
+  "arrived_at_store_at" TIMESTAMP,
+  "in_transit_at" TIMESTAMP,
   "inProgressAt" TIMESTAMP,
   "completedAt" TIMESTAMP,
   "cancelledAt" TIMESTAMP

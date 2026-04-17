@@ -78,6 +78,8 @@ export enum DisputeType {
 export enum DeliveryStatus {
   pending = 'pending',
   accepted = 'accepted',
+  arrivedAtStore = 'arrivedAtStore',
+  inTransit = 'inTransit',
   inProgress = 'inProgress',
   completed = 'completed',
   cancelled = 'cancelled',
@@ -346,6 +348,8 @@ export interface DeliveryOrder {
   estimatedTime: number | null;
   createdAt: Date;
   acceptedAt: Date | null;
+  arrivedAtStoreAt: Date | null;
+  inTransitAt: Date | null;
   inProgressAt: Date | null;
   completedAt: Date | null;
   cancelledAt: Date | null;

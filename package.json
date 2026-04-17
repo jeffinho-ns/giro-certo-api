@@ -11,7 +11,8 @@
     "db:migrate": "node scripts/setup-db.js",
     "db:images": "node scripts/setup-images.js",
     "db:add-role": "node scripts/add-user-role.js",
-    "create:admin": "node scripts/create-admin-user.js"
+    "create:admin": "node scripts/create-admin-user.js",
+    "db:migrate:delivery-logistics": "node scripts/run-delivery-logistics-migration.js"
   },
   "keywords": [
     "api",

@@ -2,8 +2,11 @@ import { query, queryOne, transaction } from '../lib/db';
 import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria, DeliveryStatus, DeliveryOrder, User, Partner, Wallet, TransactionType, TransactionStatus, VehicleType, MaintenanceStatus } from '../types';
 import { calculateDistance } from '../utils/haversine';
 import { generateId } from '../utils/id';
+import { AlertService, AlertSeverity, AlertType } from './alert.service';
+import { UserRole } from '../types';
 
 export class DeliveryService {
+  private readonly alertService = new AlertService();
   /**
    * Criar um novo pedido de delivery
    * Calcula automaticamente a comissão baseada no tipo de assinatura
@@ -112,7 +115,7 @@ export class DeliveryService {
       `SELECT 
         u.*,
         w.* as wallet,
-        COUNT(DISTINCT CASE WHEN do.status IN ('accepted', 'inProgress') THEN do.id END) as "activeOrders",
+        COUNT(DISTINCT CASE WHEN do.status IN ('accepted', 'arrivedAtStore', 'inTransit', 'inProgress') THEN do.id END) as "activeOrders",
         COALESCE(AVG(r.rating), 0) as "averageRating",
         -- Buscar bike principal do entregador
         (
@@ -269,6 +272,9 @@ export class DeliveryService {
     if (order.status !== DeliveryStatus.pending) {
       throw new Error('Pedido não está mais disponível');
     }
+    if (order.riderId) {
+      throw new Error('Pedido já possui entregador atribuído');
+    }
 
     // Buscar entregador com bike
     const rider = await queryOne<User & { bike: any }>(
@@ -367,14 +373,57 @@ export class DeliveryService {
       throw new Error('Pedido não encontrado');
     }
 
-    let updateQuery = 'UPDATE "DeliveryOrder" SET status = $1';
-    const params: any[] = [data.status];
+    const actorUserId = data.riderId;
+    const currentStatus = order.status;
+    const nextStatus = data.status;
 
-    if (data.status === DeliveryStatus.inProgress) {
+    const allowedTransitions: Record<string, DeliveryStatus[]> = {
+      [DeliveryStatus.pending]: [DeliveryStatus.accepted, DeliveryStatus.cancelled],
+      [DeliveryStatus.accepted]: [
+        DeliveryStatus.arrivedAtStore,
+        DeliveryStatus.cancelled,
+      ],
+      [DeliveryStatus.arrivedAtStore]: [
+        DeliveryStatus.inTransit,
+        DeliveryStatus.cancelled,
+      ],
+      [DeliveryStatus.inTransit]: [DeliveryStatus.completed, DeliveryStatus.cancelled],
+      [DeliveryStatus.inProgress]: [DeliveryStatus.completed, DeliveryStatus.cancelled],
+      [DeliveryStatus.completed]: [],
+      [DeliveryStatus.cancelled]: [],
+    };
+
+    const isAllowed = allowedTransitions[currentStatus]?.includes(nextStatus);
+    if (!isAllowed) {
+      throw new Error(
+        `Transição inválida de status: ${currentStatus} -> ${nextStatus}`
+      );
+    }
+
+    // Segurança: após aceite, somente o rider que aceitou pode avançar o fluxo logístico.
+    if (
+      [DeliveryStatus.arrivedAtStore, DeliveryStatus.inTransit, DeliveryStatus.completed].includes(nextStatus) &&
+      (!actorUserId || actorUserId !== order.riderId)
+    ) {
+      throw new Error('Apenas o motociclista responsável pode atualizar este status');
+    }
+
+    let updateQuery = 'UPDATE "DeliveryOrder" SET status = $1';
+    const params: any[] = [nextStatus];
+
+    if (nextStatus === DeliveryStatus.arrivedAtStore) {
+      updateQuery += ', "arrived_at_store_at" = NOW()';
+    }
+
+    if (nextStatus === DeliveryStatus.inTransit) {
+      updateQuery += ', "in_transit_at" = NOW()';
+    }
+
+    if (nextStatus === DeliveryStatus.inProgress) {
       updateQuery += ', "inProgressAt" = NOW()';
     }
 
-    if (data.status === DeliveryStatus.completed) {
+    if (nextStatus === DeliveryStatus.completed) {
       updateQuery += ', "completedAt" = NOW()';
 
       // Creditar comissão na wallet do motociclista
@@ -389,7 +438,7 @@ export class DeliveryService {
       }
     }
 
-    if (data.status === DeliveryStatus.cancelled) {
+    if (nextStatus === DeliveryStatus.cancelled) {
       updateQuery += ', "cancelledAt" = NOW()';
     }
 
@@ -403,7 +452,38 @@ export class DeliveryService {
       [orderId]
     );
 
+    if (nextStatus === DeliveryStatus.arrivedAtStore && updatedOrder) {
+      await this.notifyAdminsRiderArrivedAtStore(updatedOrder);
+    }
+
     return updatedOrder;
+  }
+
+  private async notifyAdminsRiderArrivedAtStore(order: DeliveryOrder) {
+    const adminUsers = await query<{ id: string }>(
+      'SELECT id FROM "User" WHERE role = $1',
+      [UserRole.ADMIN]
+    );
+
+    if (!adminUsers.length) return;
+
+    await Promise.all(
+      adminUsers.map((admin) =>
+        this.alertService.createAlert({
+          type: AlertType.DELIVERY_ARRIVED_AT_STORE,
+          severity: AlertSeverity.MEDIUM,
+          title: 'Motociclista chegou ao estabelecimento',
+          message: `${order.riderName ?? 'Motociclista'} chegou em ${order.storeName} e aguarda retirada.`,
+          userId: admin.id,
+          metadata: {
+            deliveryOrderId: order.id,
+            storeId: order.storeId,
+            riderId: order.riderId,
+            status: order.status,
+          },
+        })
+      )
+    );
   }
 
   /**

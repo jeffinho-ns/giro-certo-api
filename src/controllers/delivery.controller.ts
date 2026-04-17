@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { DeliveryService } from '../services/delivery.service';
 import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria } from '../types';
+import { AuthRequest } from '../middleware/auth';
 
 const deliveryService = new DeliveryService();
 
@@ -46,13 +47,16 @@ export class DeliveryController {
     }
   }
 
-  async acceptOrder(req: Request, res: Response) {
+  async acceptOrder(req: AuthRequest, res: Response) {
     try {
       const orderId = Array.isArray(req.params.orderId) ? req.params.orderId[0] : req.params.orderId;
       const { riderId, riderName } = req.body;
 
       if (!riderId || !riderName) {
         return res.status(400).json({ error: 'riderId e riderName são obrigatórios' });
+      }
+      if (req.userId && req.userId !== riderId) {
+        return res.status(403).json({ error: 'Você não pode aceitar corrida em nome de outro usuário' });
       }
 
       const order = await deliveryService.acceptOrder(orderId, riderId, riderName);
@@ -62,10 +66,11 @@ export class DeliveryController {
     }
   }
 
-  async updateOrderStatus(req: Request, res: Response) {
+  async updateOrderStatus(req: AuthRequest, res: Response) {
     try {
       const orderId = Array.isArray(req.params.orderId) ? req.params.orderId[0] : req.params.orderId;
       const data: UpdateDeliveryStatusDto = req.body;
+      data.riderId = req.userId;
 
       const order = await deliveryService.updateOrderStatus(orderId, data);
       res.json(order);
