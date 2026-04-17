@@ -2,6 +2,7 @@ import { decodePolyline } from '../utils/polyline';
 
 const ROUTES_V2_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 const LEGACY_DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
+const OSRM_DEFAULT_BASE = 'https://router.project-osrm.org';
 
 /**
  * Chave só no servidor (Render): sem restrição de app Android → Directions/Routes funcionam.
@@ -23,20 +24,54 @@ export class MapsRouteService {
     destLng: number
   ): Promise<{ lat: number; lng: number }[]> {
     const key = this.getGoogleKey();
-    if (!key) {
+    if (key) {
+      const v2 = await this.tryRoutesV2(key, originLat, originLng, destLat, destLng);
+      if (v2.length >= 2) return v2;
+
+      const legacy = await this.tryLegacyDirections(key, originLat, originLng, destLat, destLng);
+      if (legacy.length >= 2) return legacy;
+    } else {
       console.warn(
-        '[MapsRouteService] Defina GOOGLE_MAPS_SERVER_KEY (ou GOOGLE_DIRECTIONS_API_KEY) no Render para rotas no mapa.'
+        '[MapsRouteService] Sem chave Google no servidor; usando OSRM como fallback.'
       );
-      return [];
     }
 
-    const v2 = await this.tryRoutesV2(key, originLat, originLng, destLat, destLng);
-    if (v2.length >= 2) return v2;
-
-    const legacy = await this.tryLegacyDirections(key, originLat, originLng, destLat, destLng);
-    if (legacy.length >= 2) return legacy;
+    const osrm = await this.tryOsrm(originLat, originLng, destLat, destLng);
+    if (osrm.length >= 2) return osrm;
 
     return [];
+  }
+
+  private osrmBase(): string {
+    const b = process.env.OSRM_BASE_URL || OSRM_DEFAULT_BASE;
+    return b.replace(/\/$/, '');
+  }
+
+  /** OSRM (OpenStreetMap): geometria por ruas, sem chave. */
+  private async tryOsrm(
+    originLat: number,
+    originLng: number,
+    destLat: number,
+    destLng: number
+  ): Promise<{ lat: number; lng: number }[]> {
+    try {
+      const path = `${originLng},${originLat};${destLng},${destLat}`;
+      const url = `${this.osrmBase()}/route/v1/driving/${path}?overview=full&geometries=geojson`;
+      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!res.ok) {
+        console.warn(`[MapsRouteService] OSRM HTTP ${res.status}`);
+        return [];
+      }
+      const data = (await res.json()) as {
+        routes?: Array<{ geometry?: { coordinates?: number[][] } }>;
+      };
+      const coords = data.routes?.[0]?.geometry?.coordinates;
+      if (!coords || coords.length < 2) return [];
+      return coords.map((c) => ({ lat: c[1], lng: c[0] }));
+    } catch (e) {
+      console.warn('[MapsRouteService] OSRM exception:', e);
+      return [];
+    }
   }
 
   private async tryRoutesV2(
