@@ -25,6 +25,7 @@ import reportsRoutes from './routes/reports.routes';
 import alertsRoutes from './routes/alerts.routes';
 import socialRoutes from './routes/social.routes';
 import communitiesRoutes from './routes/communities.routes';
+import mapsRoutes from './routes/maps.routes';
 
 dotenv.config();
 
@@ -89,6 +90,7 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/alerts', alertsRoutes);
 app.use('/api/social', socialRoutes);
 app.use('/api/communities', communitiesRoutes);
+app.use('/api/maps', mapsRoutes);
 
 // Error handler
 app.use(errorHandler);
