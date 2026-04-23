@@ -13,6 +13,9 @@ import { AlertService, AlertType, AlertSeverity } from '../services/alert.servic
 import { registerFcmToken, sendPushToUser } from '../services/fcm.service';
 import { ImageEntityType } from '../types';
 import { generateId } from '../utils/id';
+import { ioEmit } from '../utils/socket-events';
+import { shouldEmitRiderLocationSocket } from '../utils/rider-socket-throttle';
+import { recordDeliveryTrackingIfDue } from '../utils/delivery-tracking-writer';
 
 const router = Router();
 const imageService = new ImageService();
@@ -327,6 +330,30 @@ router.put('/me/location', authenticateToken, async (req: AuthRequest, res: Resp
        WHERE id = $4`,
       [data.latitude, data.longitude, data.isOnline ?? true, req.userId]
     );
+
+    try {
+      await recordDeliveryTrackingIfDue(req.userId, data.latitude, data.longitude);
+    } catch (trackErr) {
+      console.warn('[users/me/location] DeliveryTracking:', trackErr);
+    }
+
+    const activeOrder = await queryOne<{ id: string; status: string }>(
+      `SELECT id, status::text AS status FROM "DeliveryOrder"
+       WHERE "riderId" = $1 AND status IN ('accepted','arrivedAtStore','inTransit','inProgress')
+       ORDER BY COALESCE("acceptedAt", "createdAt") DESC
+       LIMIT 1`,
+      [req.userId]
+    );
+    if (activeOrder && shouldEmitRiderLocationSocket(req.userId)) {
+      ioEmit(req.app, 'rider:location:update', {
+        userId: req.userId,
+        lat: data.latitude,
+        lng: data.longitude,
+        orderId: activeOrder.id,
+        status: activeOrder.status,
+        at: Date.now(),
+      });
+    }
 
     res.json({ message: 'Localização atualizada com sucesso' });
   } catch (error: any) {

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { DeliveryService } from '../services/delivery.service';
 import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria } from '../types';
 import { AuthRequest } from '../middleware/auth';
+import { ioEmit } from '../utils/socket-events';
 
 const deliveryService = new DeliveryService();
 
@@ -12,6 +13,7 @@ export class DeliveryController {
       const order = await deliveryService.createOrder(data);
       // Retornar apenas campos do pedido (sem partner) para compatibilidade com clientes
       const { partner: _p, ...orderPlain } = order as any;
+      ioEmit(req.app, 'delivery:update', { order: orderPlain });
       res.status(201).json(orderPlain);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -60,6 +62,8 @@ export class DeliveryController {
       }
 
       const order = await deliveryService.acceptOrder(orderId, riderId, riderName);
+      ioEmit(req.app, 'delivery:status:changed', { order });
+      ioEmit(req.app, 'delivery:update', { order });
       res.json(order);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -73,6 +77,8 @@ export class DeliveryController {
       data.riderId = req.userId;
 
       const order = await deliveryService.updateOrderStatus(orderId, data);
+      ioEmit(req.app, 'delivery:status:changed', { order });
+      ioEmit(req.app, 'delivery:update', { order });
       res.json(order);
     } catch (error: any) {
       res.status(400).json({ error: error.message });

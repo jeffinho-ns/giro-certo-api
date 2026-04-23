@@ -124,13 +124,24 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
   try {
     const limit = parseInt(req.query.limit as string) || 20;
     const status = req.query.status as string | undefined;
+    const statusesCsv = req.query.statuses as string | undefined;
     const vehicleType = req.query.vehicleType as string | undefined;
 
     let whereClause = 'WHERE 1=1';
     const params: any[] = [];
     let paramIndex = 1;
 
-    if (status) {
+    if (statusesCsv) {
+      const parts = statusesCsv
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (parts.length > 0) {
+        whereClause += ` AND "do".status = ANY($${paramIndex}::text[])`;
+        params.push(parts);
+        paramIndex++;
+      }
+    } else if (status) {
       whereClause += ` AND "do".status = $${paramIndex}`;
       params.push(status);
       paramIndex++;
@@ -261,9 +272,27 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
           FROM "DeliveryOrder" do2
           WHERE do2."riderId" = u.id
             AND do2.status IN ('accepted', 'arrivedAtStore', 'inTransit', 'inProgress')
-          ORDER BY do2."createdAt" DESC
+          ORDER BY COALESCE(do2."acceptedAt", do2."createdAt") DESC
           LIMIT 1
-        ) as "currentOrderStatus"
+        ) as "currentOrderStatus",
+        (
+          SELECT json_build_object(
+            'id', do3.id,
+            'status', do3.status,
+            'storeName', do3."storeName",
+            'storeAddress', do3."storeAddress",
+            'deliveryAddress', do3."deliveryAddress",
+            'storeLatitude', do3."storeLatitude",
+            'storeLongitude', do3."storeLongitude",
+            'deliveryLatitude', do3."deliveryLatitude",
+            'deliveryLongitude', do3."deliveryLongitude"
+          )
+          FROM "DeliveryOrder" do3
+          WHERE do3."riderId" = u.id
+            AND do3.status IN ('accepted', 'arrivedAtStore', 'inTransit', 'inProgress')
+          ORDER BY COALESCE(do3."acceptedAt", do3."createdAt") DESC
+          LIMIT 1
+        ) as "currentOrder"
        FROM "User" u
        ${bikeJoinClause}
        LEFT JOIN "DeliveryOrder" "do" ON "do"."riderId" = u.id AND "do".status IN ('accepted', 'arrivedAtStore', 'inTransit', 'inProgress')
