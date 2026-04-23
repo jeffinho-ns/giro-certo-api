@@ -4,6 +4,7 @@ import { calculateDistance } from '../utils/haversine';
 import { generateId } from '../utils/id';
 import { AlertService, AlertSeverity, AlertType } from './alert.service';
 import { UserRole } from '../types';
+import { sendPushToUser } from './fcm.service';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
@@ -76,6 +77,14 @@ export class DeliveryService {
        WHERE ord.id = $1`,
       [orderId]
     );
+
+    if (order) {
+      // Push para riders elegíveis: funciona com app em background/tela bloqueada.
+      // Não bloqueia criação do pedido se o Firebase/FCM falhar.
+      void this.notifyMatchingRidersAboutNewOrder(order).catch((err) => {
+        console.warn('[DeliveryService] push new order falhou:', err);
+      });
+    }
 
     return order;
   }
@@ -481,6 +490,41 @@ export class DeliveryService {
             riderId: order.riderId,
             status: order.status,
           },
+        })
+      )
+    );
+  }
+
+  private async notifyMatchingRidersAboutNewOrder(
+    order: DeliveryOrder
+  ): Promise<void> {
+    const matching = await this.findMatchingRiders({
+      latitude: order.storeLatitude,
+      longitude: order.storeLongitude,
+      radius: 7,
+      storeLatitude: order.storeLatitude,
+      storeLongitude: order.storeLongitude,
+      deliveryLatitude: order.deliveryLatitude,
+      deliveryLongitude: order.deliveryLongitude,
+    });
+
+    const available = matching.filter((r) => (r.activeOrders || 0) === 0);
+    if (available.length === 0) return;
+
+    const distancePart =
+      typeof available[0]?.deliveryDistance === 'number'
+        ? ` • ${available[0].deliveryDistance.toFixed(1)} km`
+        : '';
+    const body = `${order.storeName} • taxa R$ ${Number(order.deliveryFee).toFixed(2)}${distancePart}`;
+
+    await Promise.all(
+      available.slice(0, 40).map((r) =>
+        sendPushToUser(r.id, 'Nova corrida disponível', body, {
+          type: 'delivery_offer',
+          orderId: order.id,
+          storeId: order.storeId,
+          storeName: order.storeName,
+          status: String(order.status),
         })
       )
     );

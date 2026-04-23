@@ -12,7 +12,8 @@
     "db:images": "node scripts/setup-images.js",
     "db:add-role": "node scripts/add-user-role.js",
     "create:admin": "node scripts/create-admin-user.js",
-    "db:migrate:delivery-logistics": "node scripts/run-delivery-logistics-migration.js"
+    "db:migrate:delivery-logistics": "node scripts/run-delivery-logistics-migration.js",
+    "db:migrate:user-fcm-tokens": "node scripts/run-user-fcm-token-migration.js"
   },
   "keywords": [
     "api",
