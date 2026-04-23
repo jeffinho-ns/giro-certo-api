@@ -65,8 +65,9 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         id, "userId", model, brand, "vehicleType", plate, "currentKm",
         "oilType", "frontTirePressure", "rearTirePressure", 
         "photoUrl", "vehiclePhotoUrl", "platePhotoUrl",
+        nickname, "ridingStyle", accessories, "nextUpgrade", "preferredColor", "galleryUrls",
         "createdAt", "updatedAt"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW(), NOW())`,
       [
         bikeId,
         req.userId,
@@ -81,6 +82,12 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         data.photoUrl || null,
         data.vehiclePhotoUrl || null,
         data.platePhotoUrl || null,
+        data.nickname || null,
+        data.ridingStyle || null,
+        data.accessories || [],
+        data.nextUpgrade || null,
+        data.preferredColor || null,
+        data.galleryUrls || [],
       ]
     );
 
@@ -90,6 +97,87 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     );
 
     res.status(201).json({ bike });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Atualizar dados premium da garagem (inclui múltiplas fotos)
+router.patch('/:bikeId', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+
+    const bikeId = Array.isArray(req.params.bikeId) ? req.params.bikeId[0] : req.params.bikeId;
+    const current = await queryOne<Bike>(
+      'SELECT * FROM "Bike" WHERE id = $1',
+      [bikeId]
+    );
+    if (!current || current.userId !== req.userId) {
+      return res.status(403).json({ error: 'Moto não encontrada ou sem permissão' });
+    }
+
+    const data = req.body as Partial<CreateBikeDto>;
+    const updates: string[] = [];
+    const values: any[] = [];
+    let pos = 1;
+
+    const setNullableText = (column: string, value: unknown) => {
+      if (value === undefined) return;
+      updates.push(`${column} = $${pos}`);
+      values.push(value === null || value === '' ? null : String(value));
+      pos++;
+    };
+
+    const setNullableNumber = (column: string, value: unknown) => {
+      if (value === undefined) return;
+      const parsed = Number(value);
+      updates.push(`${column} = $${pos}`);
+      values.push(Number.isFinite(parsed) ? parsed : null);
+      pos++;
+    };
+
+    setNullableText('model', data.model);
+    setNullableText('brand', data.brand);
+    setNullableText('plate', data.plate);
+    setNullableNumber('"currentKm"', data.currentKm);
+    setNullableText('"oilType"', data.oilType);
+    setNullableNumber('"frontTirePressure"', data.frontTirePressure);
+    setNullableNumber('"rearTirePressure"', data.rearTirePressure);
+    setNullableText('"photoUrl"', data.photoUrl);
+    setNullableText('"vehiclePhotoUrl"', data.vehiclePhotoUrl);
+    setNullableText('"platePhotoUrl"', data.platePhotoUrl);
+    setNullableText('nickname', data.nickname);
+    setNullableText('"ridingStyle"', data.ridingStyle);
+    setNullableText('"nextUpgrade"', data.nextUpgrade);
+    setNullableText('"preferredColor"', data.preferredColor);
+
+    if (data.accessories !== undefined) {
+      updates.push(`accessories = $${pos}`);
+      values.push(Array.isArray(data.accessories) ? data.accessories : []);
+      pos++;
+    }
+    if (data.galleryUrls !== undefined) {
+      updates.push(`"galleryUrls" = $${pos}`);
+      values.push(Array.isArray(data.galleryUrls) ? data.galleryUrls : []);
+      pos++;
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
+    }
+
+    updates.push(`"updatedAt" = NOW()`);
+    values.push(bikeId);
+
+    await query(
+      `UPDATE "Bike" SET ${updates.join(', ')} WHERE id = $${pos}`,
+      values
+    );
+
+    const bike = await queryOne<Bike>('SELECT * FROM "Bike" WHERE id = $1', [bikeId]);
+    res.json({ bike });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }

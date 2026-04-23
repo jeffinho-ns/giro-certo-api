@@ -193,6 +193,12 @@ export interface CreateBikeDto {
   photoUrl?: string;
   vehiclePhotoUrl?: string;
   platePhotoUrl?: string; // Apenas para motos
+  nickname?: string;
+  ridingStyle?: string;
+  accessories?: string[];
+  nextUpgrade?: string;
+  preferredColor?: string;
+  galleryUrls?: string[];
 }
 
 export interface CreateMaintenanceLogDto {
@@ -261,6 +267,12 @@ export interface Bike {
   photoUrl: string | null;
   vehiclePhotoUrl: string | null;
   platePhotoUrl: string | null; // Apenas para motos
+  nickname: string | null;
+  ridingStyle: string | null;
+  accessories: string[];
+  nextUpgrade: string | null;
+  preferredColor: string | null;
+  galleryUrls: string[];
   createdAt: Date;
   updatedAt: Date;
 }
