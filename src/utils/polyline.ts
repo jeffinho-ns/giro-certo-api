@@ -14,6 +14,7 @@ export function decodePolyline(encoded: string): { lat: number; lng: number }[] 
     let shift = 0;
     let result = 0;
     do {
+      if (index >= encoded.length) return points;
       b = encoded.charCodeAt(index++) - 63;
       result |= (b & 0x1f) << shift;
       shift += 5;
@@ -24,6 +25,7 @@ export function decodePolyline(encoded: string): { lat: number; lng: number }[] 
     result = 0;
     shift = 0;
     do {
+      if (index >= encoded.length) return points;
       b = encoded.charCodeAt(index++) - 63;
       result |= (b & 0x1f) << shift;
       shift += 5;

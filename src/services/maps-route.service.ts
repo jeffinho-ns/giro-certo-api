@@ -1,8 +1,13 @@
+import { normalizeCoordinatesForBrazilRouting } from '../utils/geo-coordinates';
 import { decodePolyline } from '../utils/polyline';
 
 const ROUTES_V2_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 const LEGACY_DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
 const OSRM_DEFAULT_BASE = 'https://router.project-osrm.org';
+
+/** Field mask oficial (camelCase) — exige header; ver Routes API v2. */
+const ROUTES_V2_FIELD_MASK =
+  'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline';
 
 /**
  * Chave só no servidor (Render): sem restrição de app Android → Directions/Routes funcionam.
@@ -23,23 +28,58 @@ export class MapsRouteService {
     destLat: number,
     destLng: number
   ): Promise<{ lat: number; lng: number }[]> {
-    const key = this.getGoogleKey();
-    if (key) {
-      const v2 = await this.tryRoutesV2(key, originLat, originLng, destLat, destLng);
-      if (v2.length >= 2) return v2;
+    try {
+      const n = normalizeCoordinatesForBrazilRouting(originLat, originLng, destLat, destLng);
+      if (n.corrected) {
+        console.warn('[MapsRouteService] Coordenadas normalizadas (Brasil):', {
+          origin: { lat: n.originLat, lng: n.originLng },
+          dest: { lat: n.destLat, lng: n.destLng },
+        });
+      }
 
-      const legacy = await this.tryLegacyDirections(key, originLat, originLng, destLat, destLng);
-      if (legacy.length >= 2) return legacy;
-    } else {
-      console.warn(
-        '[MapsRouteService] Sem chave Google no servidor; usando OSRM como fallback.'
-      );
+      const key = this.getGoogleKey();
+      if (key) {
+        const v2 = await this.tryRoutesV2(
+          key,
+          n.originLat,
+          n.originLng,
+          n.destLat,
+          n.destLng
+        );
+        if (v2.length >= 2) return v2;
+
+        const legacy = await this.tryLegacyDirections(
+          key,
+          n.originLat,
+          n.originLng,
+          n.destLat,
+          n.destLng
+        );
+        if (legacy.length >= 2) return legacy;
+      } else {
+        console.warn(
+          '[MapsRouteService] Sem chave Google no servidor; usando OSRM como fallback.'
+        );
+      }
+
+      const osrm = await this.tryOsrm(n.originLat, n.originLng, n.destLat, n.destLng);
+      if (osrm.length >= 2) return osrm;
+
+      return [];
+    } catch (e) {
+      console.error('[MapsRouteService] getRoutePointsLatLng falhou (capturado):', e);
+      return [];
     }
+  }
 
-    const osrm = await this.tryOsrm(originLat, originLng, destLat, destLng);
-    if (osrm.length >= 2) return osrm;
-
-    return [];
+  private safeDecodePolyline(encoded: string | undefined | null): { lat: number; lng: number }[] {
+    if (!encoded) return [];
+    try {
+      return decodePolyline(encoded);
+    } catch (e) {
+      console.warn('[MapsRouteService] decodePolyline inválida:', e);
+      return [];
+    }
   }
 
   private osrmBase(): string {
@@ -56,15 +96,24 @@ export class MapsRouteService {
   ): Promise<{ lat: number; lng: number }[]> {
     try {
       const path = `${originLng},${originLat};${destLng},${destLat}`;
-      const url = `${this.osrmBase()}/route/v1/driving/${path}?overview=full&geometries=geojson`;
+      // Codifica o segmento `lon,lat;lon,lat` para evitar 400 em proxies/servidores sensíveis a `;` na path
+      const url = `${this.osrmBase()}/route/v1/driving/${encodeURIComponent(
+        path
+      )}?overview=full&geometries=geojson`;
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!res.ok) {
         console.warn(`[MapsRouteService] OSRM HTTP ${res.status}`);
         return [];
       }
-      const data = (await res.json()) as {
+      let data: {
         routes?: Array<{ geometry?: { coordinates?: number[][] } }>;
       };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch (parseErr) {
+        console.warn('[MapsRouteService] OSRM JSON inválido:', parseErr);
+        return [];
+      }
       const coords = data.routes?.[0]?.geometry?.coordinates;
       if (!coords || coords.length < 2) return [];
       return coords.map((c) => ({ lat: c[1], lng: c[0] }));
@@ -104,8 +153,7 @@ export class MapsRouteService {
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': key,
-            'X-Goog-FieldMask':
-              'routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline',
+            'X-Goog-FieldMask': ROUTES_V2_FIELD_MASK,
           },
           body,
         });
@@ -116,17 +164,23 @@ export class MapsRouteService {
           continue;
         }
 
-        const data = (await res.json()) as {
+        let data: {
           error?: unknown;
           routes?: Array<{ polyline?: { encodedPolyline?: string } }>;
         };
+        try {
+          data = (await res.json()) as typeof data;
+        } catch (parseErr) {
+          console.warn(`[MapsRouteService] Routes v2 ${travelMode} JSON inválido:`, parseErr);
+          continue;
+        }
         if (data.error) {
           console.warn(`[MapsRouteService] Routes v2 ${travelMode} error:`, data.error);
           continue;
         }
         const enc = data.routes?.[0]?.polyline?.encodedPolyline;
         if (!enc) continue;
-        const pts = decodePolyline(enc);
+        const pts = this.safeDecodePolyline(enc);
         if (pts.length >= 2) return pts;
       } catch (e) {
         console.warn(`[MapsRouteService] Routes v2 ${travelMode} exception:`, e);
@@ -154,16 +208,22 @@ export class MapsRouteService {
         console.warn(`[MapsRouteService] Legacy Directions HTTP ${res.status}`);
         return [];
       }
-      const data = (await res.json()) as {
+      let data: {
         status?: string;
         routes?: Array<{ overview_polyline?: { points?: string }; legs?: unknown[] }>;
       };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch (parseErr) {
+        console.warn('[MapsRouteService] Legacy Directions JSON inválido:', parseErr);
+        return [];
+      }
       if (data.status !== 'OK' || !data.routes?.length) return [];
 
       const route = data.routes[0];
       const overview = route.overview_polyline?.points;
       if (overview) {
-        const pts = decodePolyline(overview);
+        const pts = this.safeDecodePolyline(overview);
         if (pts.length >= 2) return pts;
       }
       return this.pointsFromLegSteps(route);
@@ -186,7 +246,7 @@ export class MapsRouteService {
       for (const step of steps) {
         const enc = step.polyline?.points;
         if (!enc) continue;
-        const segment = decodePolyline(enc);
+        const segment = this.safeDecodePolyline(enc);
         if (segment.length === 0) continue;
         if (all.length === 0) {
           all.push(...segment);
