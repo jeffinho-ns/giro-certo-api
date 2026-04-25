@@ -6,7 +6,7 @@ import {
   uploadBuffer,
   buildObjectPath,
 } from '../services/firebase-storage.service';
-import { authenticateToken, AuthRequest, requireAdmin } from '../middleware/auth';
+import { authenticateToken, AuthRequest, requireAdmin, requireModerator } from '../middleware/auth';
 import { UpdateUserLocationDto, User, Bike, Wallet, UserRole, UserType, PilotProfile } from '../types';
 import { ImageService } from '../services/image.service';
 import { AlertService, AlertType, AlertSeverity } from '../services/alert.service';
@@ -74,6 +74,7 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
          u.id, u.name, u.email, u.age, u."photoUrl", u."pilotProfile", u.role, u."partnerId",
          u."isSubscriber", u."subscriptionType", u."loyaltyPoints",
          u."currentLat", u."currentLng", u."isOnline", u."createdAt", u."updatedAt",
+         u."hasVerifiedDocuments", u."deliveryRiderBlocked",
          ${USER_TYPE_SQL} as "userType"
        FROM "User" u
        ORDER BY u."createdAt" DESC`
@@ -217,6 +218,41 @@ router.get('/:userId', authenticateToken, async (req: Request, res: Response) =>
     res.status(400).json({ error: error.message });
   }
 });
+
+// Bloquear / desbloquear entregador de corridas (inadimplência, etc.) — admin
+router.put(
+  '/:userId/delivery-rider-block',
+  authenticateToken,
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = getParam(req.params.userId);
+      const { blocked } = req.body as { blocked?: boolean };
+      if (typeof blocked !== 'boolean') {
+        return res.status(400).json({ error: 'Envie { "blocked": true | false }' });
+      }
+      const updated = await queryOne<User>(
+        `UPDATE "User" 
+         SET "deliveryRiderBlocked" = $1, "updatedAt" = NOW() 
+         WHERE id = $2
+         RETURNING id, "deliveryRiderBlocked"`,
+        [blocked, userId]
+      );
+      if (!updated) {
+        return res.status(404).json({ error: 'Usuário não encontrado' });
+      }
+      res.json({
+        userId: updated.id,
+        deliveryRiderBlocked: (updated as any).deliveryRiderBlocked,
+        message: blocked
+          ? 'Entregador bloqueado: não receberá novas corridas.'
+          : 'Bloqueio de corridas removido.',
+      });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
 
 // Listar seguidores de um utilizador
 router.get('/:userId/followers', authenticateToken, async (req: AuthRequest, res: Response) => {

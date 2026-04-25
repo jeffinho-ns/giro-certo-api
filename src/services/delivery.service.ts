@@ -152,6 +152,7 @@ export class DeliveryService {
        WHERE u."isOnline" = true 
          AND u."currentLat" IS NOT NULL 
          AND u."currentLng" IS NOT NULL
+         AND COALESCE(u."deliveryRiderBlocked", false) = false
        GROUP BY u.id, w.id`
     );
 
@@ -306,6 +307,10 @@ export class DeliveryService {
 
     if (!rider) {
       throw new Error('Entregador não encontrado');
+    }
+
+    if (rider.deliveryRiderBlocked) {
+      throw new Error('Entregador bloqueado para corridas. Entre em contato com o suporte.');
     }
 
     // Verificar bloqueio por manutenção (a menos que tenha override)

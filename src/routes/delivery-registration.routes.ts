@@ -53,6 +53,25 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// Listar todos os registros de delivery de um user (moderação)
+router.get(
+  '/admin/by-user/:userId',
+  authenticateToken,
+  requireModerator,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+      if (!userId) {
+        return res.status(400).json({ error: 'userId inválido' });
+      }
+      const registrations = await registrationService.getRegistrationsByUserId(userId);
+      return res.json({ registrations });
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  }
+);
+
 // Listar registros do usuário autenticado
 router.get('/user/mine', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {

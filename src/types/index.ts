@@ -245,6 +245,8 @@ export interface User {
   hasVerifiedDocuments: boolean;
   verificationBadge: boolean;
   maintenanceBlockOverride: boolean;
+  /** Admin: inadimplência / suspenso de corridas */
+  deliveryRiderBlocked?: boolean;
   currentLat: number | null;
   currentLng: number | null;
   lastLocationUpdate: Date | null;

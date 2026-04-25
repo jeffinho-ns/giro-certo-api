@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { authenticateToken, AuthRequest, requireModerator } from '../middleware/auth';
 import { query, queryOne } from '../lib/db';
 import { CreateBikeDto, CreateMaintenanceLogDto, Bike, MaintenanceLog, User, VehicleType } from '../types';
 import { generateId } from '../utils/id';
@@ -40,6 +40,45 @@ router.get('/me/bikes', authenticateToken, async (req: AuthRequest, res: Respons
     res.status(400).json({ error: error.message });
   }
 });
+
+// Listar veículos de outro utilizador (admin / moderação) — com manutenção
+router.get(
+  '/admin/user/:userId',
+  authenticateToken,
+  requireModerator,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+      if (!userId) {
+        return res.status(400).json({ error: 'userId inválido' });
+      }
+      const bikes = await query<Bike & { maintenanceLogs: MaintenanceLog[] }>(
+        `SELECT 
+        b.*,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', ml.id,
+              'partName', ml."partName",
+              'category', ml.category,
+              'status', ml.status,
+              'createdAt', ml."createdAt"
+            ) ORDER BY ml."createdAt" DESC
+          ) FILTER (WHERE ml.id IS NOT NULL),
+          '[]'::json
+        ) as "maintenanceLogs"
+       FROM "Bike" b
+       LEFT JOIN "MaintenanceLog" ml ON ml."bikeId" = b.id
+       WHERE b."userId" = $1
+       GROUP BY b.id`,
+        [userId]
+      );
+      return res.json({ bikes });
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  }
+);
 
 // Criar veículo (moto ou bicicleta)
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
