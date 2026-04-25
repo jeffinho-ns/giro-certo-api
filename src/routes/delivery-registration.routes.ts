@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
+import { query } from '../lib/db';
 import { DeliveryRegistrationService } from '../services/delivery-registration.service';
 import { AlertService, AlertType, AlertSeverity } from '../services/alert.service';
+import { sendPushToUser } from '../services/fcm.service';
 import { authenticateToken, AuthRequest, requireAdmin, requireModerator } from '../middleware/auth';
 import { CreateDeliveryRegistrationDto, UpdateDeliveryRegistrationStatusDto } from '../types';
 
@@ -20,20 +22,23 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     // Converter imagens base64 em buffers se fornecidas
     const processedData = {
       ...data,
-      selfieWithDocData: data.selfieWithDocBase64 
-        ? Buffer.from(data.selfieWithDocBase64, 'base64') 
+      selfieWithDocData: data.selfieWithDocBase64
+        ? Buffer.from(data.selfieWithDocBase64, 'base64')
         : null,
-      motoWithPlateData: data.motoWithPlateBase64 
-        ? Buffer.from(data.motoWithPlateBase64, 'base64') 
+      motoWithPlateData: data.motoWithPlateBase64
+        ? Buffer.from(data.motoWithPlateBase64, 'base64')
         : null,
-      platePlateCloseupData: data.platePlateCloseupBase64 
-        ? Buffer.from(data.platePlateCloseupBase64, 'base64') 
+      platePlateCloseupData: data.platePlateCloseupBase64
+        ? Buffer.from(data.platePlateCloseupBase64, 'base64')
         : null,
-      cnhPhotoData: data.cnhPhotoBase64 
-        ? Buffer.from(data.cnhPhotoBase64, 'base64') 
+      cnhPhotoData: data.cnhPhotoBase64
+        ? Buffer.from(data.cnhPhotoBase64, 'base64')
         : null,
-      crlvPhotoData: data.crlvPhotoBase64 
-        ? Buffer.from(data.crlvPhotoBase64, 'base64') 
+      crlvPhotoData: data.crlvPhotoBase64
+        ? Buffer.from(data.crlvPhotoBase64, 'base64')
+        : null,
+      bikeOptionalReceiptData: data.bikeOptionalReceiptBase64
+        ? Buffer.from(data.bikeOptionalReceiptBase64, 'base64')
         : null,
     };
 
@@ -126,6 +131,10 @@ router.put('/:registrationId/status', authenticateToken, requireAdmin, async (re
     );
 
     if (data.status === 'APPROVED' && registration?.userId) {
+      await query(
+        `UPDATE "User" SET "hasVerifiedDocuments" = true, "updatedAt" = NOW() WHERE id = $1`,
+        [registration.userId]
+      );
       const alert = await alertService.createAlert({
         type: AlertType.DELIVERY_APPROVED,
         severity: AlertSeverity.MEDIUM,
@@ -137,6 +146,12 @@ router.put('/:registrationId/status', authenticateToken, requireAdmin, async (re
       if (io?.to) {
         io.to(`user:${registration.userId}`).emit('notification', alert);
       }
+      await sendPushToUser(
+        registration.userId,
+        'Cadastro aprovado',
+        'Pode aceitar corridas de delivery. Boa jornada!',
+        { type: 'DELIVERY_REGISTRATION_APPROVED' }
+      );
     }
 
     res.json({ registration });

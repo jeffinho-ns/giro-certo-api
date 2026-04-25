@@ -5,6 +5,7 @@ import {
   DeliveryRegistration,
   DeliveryRegistrationStatus,
   User,
+  VehicleType,
 } from '../types';
 import { generateId } from '../utils/id';
 
@@ -36,19 +37,30 @@ export class DeliveryRegistrationService {
     const registrationId = generateId();
     const lastOilChangeDate = data.lastOilChangeDate || null;
     const lastOilChangeKm = data.lastOilChangeKm || null;
+    const vehicleType = data.vehicleType || VehicleType.MOTORCYCLE;
+    const equipments = Array.isArray(data.equipments) ? data.equipments : [];
+    const withReceipt = data as CreateDeliveryRegistrationDto & {
+      bikeOptionalReceiptData?: Buffer | null;
+    };
+    const bikeOptionalReceipt =
+      withReceipt.bikeOptionalReceiptData ??
+      (data.bikeOptionalReceiptBase64
+        ? Buffer.from(data.bikeOptionalReceiptBase64, 'base64')
+        : null);
 
     await query(
       `INSERT INTO "DeliveryRegistration" (
-        id, "userId", status, "cpfCnh", "selfieWithDocData", 
+        id, "userId", status, "vehicleType", "cpfCnh", "selfieWithDocData", 
         "motoWithPlateData", "platePlateCloseupData", "cnhPhotoData", 
         "crlvPhotoData", "plateLicense", "currentKilometers", 
         "lastOilChangeDate", "lastOilChangeKm", "emergencyPhone", 
-        "consentImages", "createdAt", "updatedAt"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())`,
+        "consentImages", equipments, "bikeOptionalReceiptData", "createdAt", "updatedAt"
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())`,
       [
         registrationId,
         userId,
         DeliveryRegistrationStatus.PENDING,
+        vehicleType,
         data.documentId,
         data.selfieWithDocData || null,
         data.motoWithPlateData || null,
@@ -61,6 +73,8 @@ export class DeliveryRegistrationService {
         lastOilChangeKm,
         data.emergencyPhone || null,
         data.consentImages,
+        equipments,
+        bikeOptionalReceipt || null,
       ]
     );
 
@@ -81,6 +95,9 @@ export class DeliveryRegistrationService {
       platePlateCloseupData: bufferToBase64(registration.platePlateCloseupData),
       cnhPhotoData: bufferToBase64(registration.cnhPhotoData),
       crlvPhotoData: bufferToBase64(registration.crlvPhotoData),
+      bikeOptionalReceiptData: bufferToBase64(
+        (registration as any).bikeOptionalReceiptData
+      ),
     };
   }
 
@@ -111,6 +128,9 @@ export class DeliveryRegistrationService {
       platePlateCloseupData: bufferToBase64(registration.platePlateCloseupData),
       cnhPhotoData: bufferToBase64(registration.cnhPhotoData),
       crlvPhotoData: bufferToBase64(registration.crlvPhotoData),
+      bikeOptionalReceiptData: bufferToBase64(
+        (registration as any).bikeOptionalReceiptData
+      ),
     };
   }
 
@@ -133,6 +153,9 @@ export class DeliveryRegistrationService {
       platePlateCloseupData: bufferToBase64(reg.platePlateCloseupData),
       cnhPhotoData: bufferToBase64(reg.cnhPhotoData),
       crlvPhotoData: bufferToBase64(reg.crlvPhotoData),
+      bikeOptionalReceiptData: bufferToBase64(
+        (reg as any).bikeOptionalReceiptData
+      ),
     }));
   }
 
@@ -164,6 +187,9 @@ export class DeliveryRegistrationService {
       platePlateCloseupData: bufferToBase64(reg.platePlateCloseupData),
       cnhPhotoData: bufferToBase64(reg.cnhPhotoData),
       crlvPhotoData: bufferToBase64(reg.crlvPhotoData),
+      bikeOptionalReceiptData: bufferToBase64(
+        (reg as any).bikeOptionalReceiptData
+      ),
     }));
 
     const total = await queryOne<{ count: number }>(
@@ -229,6 +255,9 @@ export class DeliveryRegistrationService {
       platePlateCloseupData: bufferToBase64(updated.platePlateCloseupData),
       cnhPhotoData: bufferToBase64(updated.cnhPhotoData),
       crlvPhotoData: bufferToBase64(updated.crlvPhotoData),
+      bikeOptionalReceiptData: bufferToBase64(
+        (updated as any).bikeOptionalReceiptData
+      ),
     };
   }
 

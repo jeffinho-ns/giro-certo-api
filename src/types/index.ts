@@ -606,6 +606,8 @@ export interface DeliveryRegistration {
   id: string;
   userId: string;
   status: DeliveryRegistrationStatus;
+  /** MOTORCYCLE (padrão) ou BICYCLE */
+  vehicleType?: VehicleType;
   cpfCnh: string;
   selfieWithDocUrl: string | null;
   motoWithPlateUrl: string | null;
@@ -622,12 +624,15 @@ export interface DeliveryRegistration {
   approvedBy: string | null;
   rejectionReason: string | null;
   adminNotes: string | null;
+  equipments?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface CreateDeliveryRegistrationDto {
   documentId: string;
+  /** Padrão: moto. Bicicleta: enviar BICYCLE. */
+  vehicleType?: VehicleType;
   plateLicense: string;
   currentKilometers: number;
   lastOilChangeDate?: Date;
@@ -646,6 +651,9 @@ export interface CreateDeliveryRegistrationDto {
   platePlateCloseupData?: Buffer;
   cnhPhotoData?: Buffer;
   crlvPhotoData?: Buffer;
+  /** Chips selecionados (mochila, etc.) */
+  equipments?: string[];
+  bikeOptionalReceiptBase64?: string;
 }
 
 export interface UpdateDeliveryRegistrationStatusDto {
