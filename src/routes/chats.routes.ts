@@ -152,6 +152,87 @@ router.post('/private', authenticateToken, async (req: AuthRequest, res: Respons
   }
 });
 
+// Obter/iniciar chat de suporte com equipe técnica (admin/moderador).
+router.post('/support/start', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const currentUserId = req.userId!;
+    const hasTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ChatConversation') as exists`
+    );
+    if (!hasTable?.exists) {
+      return res.status(501).json({ error: 'Chat indisponível no momento.' });
+    }
+
+    const supportUser = await queryOne<{ id: string; name: string }>(
+      `SELECT id, name
+       FROM "User"
+       WHERE role IN ('ADMIN', 'MODERATOR')
+         AND id <> $1
+       ORDER BY "updatedAt" DESC
+       LIMIT 1`,
+      [currentUserId]
+    );
+    if (!supportUser) {
+      return res.status(404).json({ error: 'Equipe de suporte indisponível no momento.' });
+    }
+
+    const [p1, p2] = [currentUserId, supportUser.id].sort();
+    let conv = await queryOne<{
+      id: string;
+      lastMessageAt: Date | null;
+      lastMessagePreview: string | null;
+    }>(
+      `SELECT id, "lastMessageAt", "lastMessagePreview"
+       FROM "ChatConversation"
+       WHERE "participant1Id" = $1 AND "participant2Id" = $2`,
+      [p1, p2]
+    );
+
+    if (!conv) {
+      const chatId = generateId();
+      await query(
+        `INSERT INTO "ChatConversation" (id, "participant1Id", "participant2Id", "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, NOW(), NOW())`,
+        [chatId, p1, p2]
+      );
+
+      const introText =
+        'Olá! Este é o canal de suporte técnico. Conte o problema que você encontrou.';
+      const introMsgId = generateId();
+      await query(
+        `INSERT INTO "ChatMessage" (id, "chatId", "senderId", text, "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, NOW(), NOW())`,
+        [introMsgId, chatId, supportUser.id, introText]
+      );
+      await query(
+        `UPDATE "ChatConversation"
+         SET "lastMessageAt" = NOW(), "lastMessagePreview" = $2, "updatedAt" = NOW()
+         WHERE id = $1`,
+        [chatId, introText]
+      );
+      conv = {
+        id: chatId,
+        lastMessageAt: new Date(),
+        lastMessagePreview: introText,
+      };
+    }
+
+    res.json({
+      conversation: {
+        id: conv.id,
+        title: `Suporte técnico • ${supportUser.name}`,
+        lastMessagePreview: conv.lastMessagePreview ?? '',
+        lastMessageAt: conv.lastMessageAt,
+        isGroup: false,
+        imageUrlOrUserId: supportUser.id,
+      },
+      supportAgent: supportUser,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Detalhes da conversa (participantes, estado de mute)
 router.get('/:chatId/settings', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {

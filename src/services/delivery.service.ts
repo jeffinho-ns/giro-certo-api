@@ -279,11 +279,16 @@ export class DeliveryService {
       throw new Error('Pedido não encontrado');
     }
 
-    if (order.status !== DeliveryStatus.pending) {
-      throw new Error('Pedido não está mais disponível');
-    }
-    if (order.riderId) {
-      throw new Error('Pedido já possui entregador atribuído');
+    if (order.status !== DeliveryStatus.pending || order.riderId) {
+      await this.handleAcceptanceConflict(orderId, riderId, riderName, order);
+      const conflictError: any = new Error('Pedido já foi aceito por outro entregador.');
+      conflictError.code = 'ORDER_ALREADY_ACCEPTED';
+      conflictError.details = {
+        orderId,
+        winnerRiderId: order.riderId || null,
+        winnerRiderName: order.riderName || null,
+      };
+      throw conflictError;
     }
 
     // Buscar entregador com bike
@@ -349,12 +354,15 @@ export class DeliveryService {
     const estimatedTime = Math.round((distance / avgSpeed) * 60); // minutos
 
     // Atualizar pedido
-    await query(
-      `UPDATE "DeliveryOrder" 
-       SET status = $1, "riderId" = $2, "riderName" = $3, 
-           "appCommission" = $4, distance = $5, 
+    const updatedRows = await query<DeliveryOrder>(
+      `UPDATE "DeliveryOrder"
+       SET status = $1, "riderId" = $2, "riderName" = $3,
+           "appCommission" = $4, distance = $5,
            "estimatedTime" = $6, "acceptedAt" = NOW()
-       WHERE id = $7`,
+       WHERE id = $7
+         AND status = $8
+         AND "riderId" IS NULL
+       RETURNING *`,
       [
         DeliveryStatus.accepted,
         riderId,
@@ -363,15 +371,78 @@ export class DeliveryService {
         parseFloat(distance.toFixed(2)),
         estimatedTime,
         orderId,
+        DeliveryStatus.pending,
       ]
     );
 
-    const updatedOrder = await queryOne<DeliveryOrder>(
-      'SELECT * FROM "DeliveryOrder" WHERE id = $1',
-      [orderId]
-    );
+    const updatedOrder = updatedRows[0];
+    if (!updatedOrder) {
+      const latestOrder = await queryOne<DeliveryOrder>(
+        'SELECT * FROM "DeliveryOrder" WHERE id = $1',
+        [orderId]
+      );
+      await this.handleAcceptanceConflict(orderId, riderId, riderName, latestOrder || order);
+      const conflictError: any = new Error('Pedido já foi aceito por outro entregador.');
+      conflictError.code = 'ORDER_ALREADY_ACCEPTED';
+      conflictError.details = {
+        orderId,
+        winnerRiderId: latestOrder?.riderId || null,
+        winnerRiderName: latestOrder?.riderName || null,
+      };
+      throw conflictError;
+    }
 
     return updatedOrder;
+  }
+
+  private async handleAcceptanceConflict(
+    orderId: string,
+    loserRiderId: string,
+    loserRiderName: string,
+    currentOrder: Partial<DeliveryOrder> | null
+  ): Promise<void> {
+    const winnerRiderId = currentOrder?.riderId || null;
+    const winnerRiderName = currentOrder?.riderName || 'outro entregador';
+
+    const message =
+      'Esta corrida já foi aceita por outro entregador. Confira novas corridas próximas.';
+    await sendPushToUser(
+      loserRiderId,
+      'Corrida indisponível',
+      message,
+      {
+        type: 'delivery_race_lost',
+        orderId,
+        winnerRiderId: winnerRiderId || '',
+      }
+    );
+
+    try {
+      await query(
+        `INSERT INTO "Dispute" (
+          id, "deliveryOrderId", "reportedBy", "disputeType",
+          status, description, "locationLogs", "createdAt", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())`,
+        [
+          generateId(),
+          orderId,
+          loserRiderId,
+          'DELIVERY_ISSUE',
+          'OPEN',
+          `[RACE_ACCEPTANCE] ${loserRiderName} tentou aceitar após ${winnerRiderName}.`,
+          JSON.stringify({
+            event: 'RACE_ACCEPTANCE',
+            loserRiderId,
+            loserRiderName,
+            winnerRiderId,
+            winnerRiderName,
+            at: new Date().toISOString(),
+          }),
+        ]
+      );
+    } catch {
+      // Melhor esforço: mesmo que a disputa não grave, manter notificação ao usuário.
+    }
   }
 
   /**
