@@ -33,6 +33,9 @@ const upload = multer({
 const USER_TYPE_SQL = `
   CASE
     WHEN u."partnerId" IS NOT NULL THEN 'LOJISTA'
+    WHEN EXISTS (
+      SELECT 1 FROM "DeliveryRegistration" dr WHERE dr."userId" = u.id
+    ) THEN 'DELIVERY'
     WHEN u."pilotProfile" = 'FIM_DE_SEMANA' THEN 'CASUAL'
     WHEN u."pilotProfile" = 'URBANO' THEN 'DIARIO'
     WHEN u."pilotProfile" = 'PISTA' THEN 'RACING'
