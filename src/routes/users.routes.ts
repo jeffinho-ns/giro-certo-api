@@ -437,7 +437,12 @@ router.patch('/me/profile', authenticateToken, async (req: AuthRequest, res: Res
       return res.status(401).json({ error: 'Não autenticado' });
     }
 
-    const { name, photoUrl, coverUrl } = req.body as { name?: string; photoUrl?: string; coverUrl?: string };
+    const { name, photoUrl, coverUrl, pilotProfile: rawPilot } = req.body as {
+      name?: string;
+      photoUrl?: string;
+      coverUrl?: string;
+      pilotProfile?: string;
+    };
     const updates: string[] = [];
     const values: any[] = [];
     let pos = 1;
@@ -453,6 +458,19 @@ router.patch('/me/profile', authenticateToken, async (req: AuthRequest, res: Res
     if (typeof coverUrl === 'string') {
       updates.push(`"coverUrl" = $${pos++}`);
       values.push(coverUrl || null);
+    }
+    if (typeof rawPilot === 'string' && rawPilot.trim()) {
+      const normalized = rawPilot.trim().toUpperCase();
+      let nextProfile: PilotProfile | null = null;
+      if (normalized === 'DELIVERY' || normalized === 'TRABALHO') {
+        nextProfile = PilotProfile.TRABALHO;
+      } else if (Object.values(PilotProfile).includes(normalized as PilotProfile)) {
+        nextProfile = normalized as PilotProfile;
+      }
+      if (nextProfile) {
+        updates.push(`"pilotProfile" = $${pos++}`);
+        values.push(nextProfile);
+      }
     }
 
     if (updates.length === 0) {
