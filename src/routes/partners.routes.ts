@@ -14,7 +14,7 @@ const router = Router();
 const partnerService = new PartnerService();
 
 // Listar parceiros (com filtros)
-router.get('/', authenticateToken, requireModerator, async (req: Request, res: Response) => {
+router.get('/', authenticateToken, async (req: Request, res: Response) => {
   try {
     const filters = {
       type: req.query.type as string | undefined,
@@ -90,7 +90,7 @@ router.get('/:partnerId/feed', authenticateToken, async (req: AuthRequest, res: 
 });
 
 // Buscar parceiro por ID
-router.get('/:partnerId', authenticateToken, requireModerator, async (req: Request, res: Response) => {
+router.get('/:partnerId', authenticateToken, async (req: Request, res: Response) => {
   try {
     const partnerId = Array.isArray(req.params.partnerId)
       ? req.params.partnerId[0]
