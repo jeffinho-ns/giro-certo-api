@@ -108,6 +108,7 @@ export class DeliveryController {
       ? req.params.orderId[0]
       : req.params.orderId;
     const { riderId, riderName } = req.body || {};
+    const idempotencyKey = req.header('x-idempotency-key') || undefined;
 
     try {
       if (!riderId || !riderName) {
@@ -121,7 +122,12 @@ export class DeliveryController {
           .json({ error: 'Você não pode aceitar corrida em nome de outro usuário' });
       }
 
-      const order = await deliveryService.acceptOrder(orderId, riderId, riderName);
+      const order = await deliveryService.acceptOrder(
+        orderId,
+        riderId,
+        riderName,
+        idempotencyKey
+      );
       const payload = this.withInternalCode(order as any);
       ioEmit(req.app, 'delivery:status:changed', { order: payload });
       ioEmit(req.app, 'delivery:update', { order: payload });
@@ -168,6 +174,7 @@ export class DeliveryController {
         : req.params.orderId;
       const data: UpdateDeliveryStatusDto = req.body;
       data.riderId = req.userId;
+      data.idempotencyKey = req.header('x-idempotency-key') || undefined;
 
       const order = await deliveryService.updateOrderStatus(orderId, data);
       const payload = this.withInternalCode(order as any);

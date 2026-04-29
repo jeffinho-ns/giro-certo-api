@@ -1,3 +1,5 @@
+import { incrementOpsMetric } from '../utils/ops-metrics';
+
 const GOOGLE_PLACES_AUTOCOMPLETE_URL =
   'https://maps.googleapis.com/maps/api/place/autocomplete/json';
 const GOOGLE_PLACES_DETAILS_URL =
@@ -48,6 +50,7 @@ export class GooglePlacesService {
     const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
     if (!res.ok) {
       const txt = await res.text();
+      await incrementOpsMetric('geocoding_failures_total', 1, 'autocomplete_http');
       throw new Error(`Places autocomplete HTTP ${res.status}: ${txt.slice(0, 240)}`);
     }
     const data = (await res.json()) as {
@@ -63,6 +66,7 @@ export class GooglePlacesService {
     };
 
     if (data.status && !['OK', 'ZERO_RESULTS'].includes(data.status)) {
+      await incrementOpsMetric('geocoding_failures_total', 1, `autocomplete_${data.status}`);
       throw new Error(`Places autocomplete status ${data.status}`);
     }
     return (data.predictions ?? [])
@@ -92,6 +96,7 @@ export class GooglePlacesService {
     const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
     if (!res.ok) {
       const txt = await res.text();
+      await incrementOpsMetric('geocoding_failures_total', 1, 'place_details_http');
       throw new Error(`Places details HTTP ${res.status}: ${txt.slice(0, 240)}`);
     }
     const data = (await res.json()) as {
@@ -103,11 +108,13 @@ export class GooglePlacesService {
       };
     };
     if (data.status !== 'OK' || !data.result) {
+      await incrementOpsMetric('geocoding_failures_total', 1, `place_details_${data.status ?? 'UNKNOWN'}`);
       throw new Error(`Places details status ${data.status ?? 'UNKNOWN'}`);
     }
     const lat = data.result.geometry?.location?.lat;
     const lng = data.result.geometry?.location?.lng;
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      await incrementOpsMetric('geocoding_failures_total', 1, 'place_details_invalid_coords');
       throw new Error('Place sem coordenadas validas');
     }
     return {

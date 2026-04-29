@@ -6,6 +6,7 @@ import { AlertService, AlertSeverity, AlertType } from './alert.service';
 import { UserRole } from '../types';
 import { sendPushToUser } from './fcm.service';
 import { DeliveryPricingService } from './delivery-pricing.service';
+import { incrementOpsMetric, observeOpsMetric } from '../utils/ops-metrics';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
@@ -90,6 +91,7 @@ export class DeliveryService {
     );
 
     if (order) {
+      await incrementOpsMetric('orders_created_total');
       // Push para riders elegíveis: funciona com app em background/tela bloqueada.
       // Não bloqueia criação do pedido se o Firebase/FCM falhar.
       void this.notifyMatchingRidersAboutNewOrder(order).catch((err) => {
@@ -279,7 +281,15 @@ export class DeliveryService {
    * Atualiza a comissão baseada no tipo de assinatura
    * Calcula ETA baseado no tipo de veículo
    */
-  async acceptOrder(orderId: string, riderId: string, riderName: string) {
+  async acceptOrder(
+    orderId: string,
+    riderId: string,
+    riderName: string,
+    idempotencyKey?: string
+  ) {
+    const scope = `accept:${orderId}:${riderId}`;
+    const cached = await this.getIdempotencyResponse(scope, idempotencyKey);
+    if (cached) return cached as DeliveryOrder;
     // Buscar pedido
     const order = await queryOne<DeliveryOrder>(
       'SELECT * FROM "DeliveryOrder" WHERE id = $1',
@@ -292,6 +302,9 @@ export class DeliveryService {
 
     if (order.status !== DeliveryStatus.pending || order.riderId) {
       await this.handleAcceptanceConflict(orderId, riderId, riderName, order);
+      if (order.riderId === riderId && order.status === DeliveryStatus.accepted) {
+        return order;
+      }
       const conflictError: any = new Error('Pedido já foi aceito por outro entregador.');
       conflictError.code = 'ORDER_ALREADY_ACCEPTED';
       conflictError.details = {
@@ -404,7 +417,19 @@ export class DeliveryService {
     }
 
     const enrichedOrder = await this.getOrderWithRiderContact(orderId);
-    return enrichedOrder || updatedOrder;
+    const finalOrder = (enrichedOrder || updatedOrder) as DeliveryOrder;
+    if (finalOrder.acceptedAt && finalOrder.createdAt) {
+      const seconds =
+        (new Date(finalOrder.acceptedAt).getTime() -
+          new Date(finalOrder.createdAt).getTime()) /
+        1000;
+      if (seconds >= 0) {
+        await observeOpsMetric('time_to_accept_seconds', seconds);
+      }
+    }
+    await incrementOpsMetric('orders_accepted_total');
+    await this.storeIdempotencyResponse(scope, idempotencyKey, finalOrder);
+    return finalOrder;
   }
 
   private async handleAcceptanceConflict(
@@ -413,6 +438,7 @@ export class DeliveryService {
     loserRiderName: string,
     currentOrder: Partial<DeliveryOrder> | null
   ): Promise<void> {
+    await incrementOpsMetric('acceptance_conflicts_total');
     const winnerRiderId = currentOrder?.riderId || null;
     const winnerRiderName = currentOrder?.riderName || 'outro entregador';
 
@@ -473,6 +499,13 @@ export class DeliveryService {
     const actorUserId = data.riderId;
     const currentStatus = order.status;
     const nextStatus = data.status;
+    const scope = `status:${orderId}:${nextStatus}:${actorUserId ?? 'unknown'}`;
+    const cached = await this.getIdempotencyResponse(scope, data.idempotencyKey);
+    if (cached) return cached as DeliveryOrder;
+
+    if (currentStatus === nextStatus) {
+      return order;
+    }
 
     const allowedTransitions: Record<string, DeliveryStatus[]> = {
       [DeliveryStatus.pending]: [DeliveryStatus.accepted, DeliveryStatus.cancelled],
@@ -503,6 +536,15 @@ export class DeliveryService {
       (!actorUserId || actorUserId !== order.riderId)
     ) {
       throw new Error('Apenas o motociclista responsável pode atualizar este status');
+    }
+
+    if (nextStatus === DeliveryStatus.inTransit) {
+      const expected = this.getInternalCode(order.id);
+      const received = (data.pickupCode || '').trim().toUpperCase();
+      if (!received || received !== expected) {
+        await incrementOpsMetric('pickup_code_validation_failed_total');
+        throw new Error('Código interno inválido para retirada. Confirme o código com a loja.');
+      }
     }
 
     let updateQuery = 'UPDATE "DeliveryOrder" SET status = $1';
@@ -537,6 +579,7 @@ export class DeliveryService {
 
     if (nextStatus === DeliveryStatus.cancelled) {
       updateQuery += ', "cancelledAt" = NOW()';
+      await incrementOpsMetric('orders_cancelled_total', 1, currentStatus);
     }
 
     updateQuery += ' WHERE id = $' + (params.length + 1);
@@ -556,6 +599,19 @@ export class DeliveryService {
       await this.notifyOrderStatusPush(updatedOrder);
     }
 
+    if (updatedOrder && nextStatus === DeliveryStatus.completed && updatedOrder.inTransitAt) {
+      const seconds =
+        (new Date(updatedOrder.completedAt || new Date()).getTime() -
+          new Date(updatedOrder.inTransitAt).getTime()) /
+        1000;
+      if (seconds >= 0) {
+        await observeOpsMetric('store_to_client_seconds', seconds);
+      }
+    }
+    if (updatedOrder) {
+      await incrementOpsMetric('order_status_transition_total', 1, `${currentStatus}->${nextStatus}`);
+      await this.storeIdempotencyResponse(scope, data.idempotencyKey, updatedOrder);
+    }
     return updatedOrder;
   }
 
@@ -895,5 +951,56 @@ export class DeliveryService {
         timestamp: p.timestamp,
       })),
     };
+  }
+
+  private getInternalCode(orderId: string): string {
+    const compact = (orderId || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    return `GC-${compact.slice(-8)}`;
+  }
+
+  private async ensureIdempotencyTable(): Promise<void> {
+    await query(`
+      CREATE TABLE IF NOT EXISTS "DeliveryIdempotency" (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        response JSONB NOT NULL,
+        "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE(scope, key)
+      )
+    `);
+  }
+
+  private async getIdempotencyResponse(
+    scope: string,
+    key?: string
+  ): Promise<unknown | null> {
+    const clean = key?.trim();
+    if (!clean) return null;
+    await this.ensureIdempotencyTable();
+    const row = await queryOne<{ response: unknown }>(
+      `SELECT response
+       FROM "DeliveryIdempotency"
+       WHERE scope = $1 AND key = $2
+       LIMIT 1`,
+      [scope, clean]
+    );
+    return row?.response ?? null;
+  }
+
+  private async storeIdempotencyResponse(
+    scope: string,
+    key: string | undefined,
+    response: unknown
+  ): Promise<void> {
+    const clean = key?.trim();
+    if (!clean) return;
+    await this.ensureIdempotencyTable();
+    await query(
+      `INSERT INTO "DeliveryIdempotency" (id, scope, key, response, "createdAt")
+       VALUES ($1, $2, $3, $4::jsonb, NOW())
+       ON CONFLICT (scope, key) DO NOTHING`,
+      [generateId(), scope, clean, JSON.stringify(response)]
+    );
   }
 }

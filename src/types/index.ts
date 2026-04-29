@@ -178,6 +178,8 @@ export interface UpdateDeliveryStatusDto {
   status: DeliveryStatus;
   riderId?: string;
   riderName?: string;
+  pickupCode?: string;
+  idempotencyKey?: string;
 }
 
 export interface CreateBikeDto {

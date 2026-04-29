@@ -31,6 +31,7 @@ import {
   canJoinOrderTrackingRoom,
   resolveSocketUserFromToken,
 } from './utils/socket-events';
+import { incrementOpsMetric } from './utils/ops-metrics';
 
 dotenv.config();
 
@@ -125,6 +126,7 @@ io.on('connection', (socket) => {
       bearerToken;
     const user = await resolveSocketUserFromToken(tokenFromClient);
     if (!user) {
+      void incrementOpsMetric('socket_failures_total', 1, 'auth_failed');
       socket.emit('tracking:error', { message: 'Falha de autenticacao no socket' });
       return;
     }
@@ -141,6 +143,7 @@ io.on('connection', (socket) => {
     const orderId = data?.orderId;
     if (!orderId || typeof orderId !== 'string') return;
     if (!socketUserId || !socketUserRole) {
+      void incrementOpsMetric('socket_failures_total', 1, 'join_order_unauthenticated');
       socket.emit('tracking:error', { message: 'Socket nao autenticado' });
       return;
     }
@@ -149,6 +152,7 @@ io.on('connection', (socket) => {
       orderId
     );
     if (!allowed) {
+      void incrementOpsMetric('socket_failures_total', 1, 'join_order_forbidden');
       socket.emit('tracking:error', {
         message: 'Sem permissao para acompanhar este pedido',
         orderId,
@@ -169,6 +173,7 @@ io.on('connection', (socket) => {
   socket.on('rider:location', (data: any) => {
     if (!socketUserId) return;
     if (data?.userId && data.userId !== socketUserId) {
+      void incrementOpsMetric('socket_failures_total', 1, 'location_invalid_user');
       socket.emit('tracking:error', { message: 'userId invalido no payload de localizacao' });
       return;
     }

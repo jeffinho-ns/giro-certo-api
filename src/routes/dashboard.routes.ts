@@ -2,8 +2,66 @@ import { Router, Response } from 'express';
 import { authenticateToken, AuthRequest, requireModerator } from '../middleware/auth';
 import { query, queryOne } from '../lib/db';
 import { DeliveryStatus, VehicleType } from '../types';
+import { getOpsMetricValue, getOpsMetricsForDays } from '../utils/ops-metrics';
 
 const router = Router();
+
+router.get('/delivery-sla', authenticateToken, requireModerator, async (req: AuthRequest, res: Response) => {
+  try {
+    const days = Number(req.query.days ?? 1);
+    const windowDays = Number.isFinite(days) ? Math.max(1, Math.min(days, 30)) : 1;
+
+    const [created, accepted, acceptTime, storeToClient, conflicts, geocodingFails, routeFails, socketFails, cancellationsByStage, raw] =
+      await Promise.all([
+        getOpsMetricValue('orders_created_total', windowDays),
+        getOpsMetricValue('orders_accepted_total', windowDays),
+        getOpsMetricValue('time_to_accept_seconds', windowDays),
+        getOpsMetricValue('store_to_client_seconds', windowDays),
+        getOpsMetricValue('acceptance_conflicts_total', windowDays),
+        getOpsMetricValue('geocoding_failures_total', windowDays),
+        getOpsMetricValue('route_failures_total', windowDays),
+        getOpsMetricValue('socket_failures_total', windowDays),
+        query<{ label: string; count: string }>(
+          `SELECT label, COALESCE(SUM(count), 0)::text as count
+           FROM "DeliveryOpsMetric"
+           WHERE metric = 'orders_cancelled_total'
+             AND period_date >= (CURRENT_DATE - ($1::int - 1))
+           GROUP BY label`,
+          [windowDays]
+        ),
+        getOpsMetricsForDays(windowDays),
+      ]);
+
+    const acceptanceRate = created.count > 0 ? accepted.count / created.count : 0;
+    const avgTimeToAcceptSeconds = acceptTime.count > 0 ? acceptTime.sum / acceptTime.count : 0;
+    const avgStoreToClientSeconds =
+      storeToClient.count > 0 ? storeToClient.sum / storeToClient.count : 0;
+
+    res.json({
+      windowDays,
+      acceptanceRate,
+      totals: {
+        ordersCreated: created.count,
+        ordersAccepted: accepted.count,
+        acceptanceConflicts: conflicts.count,
+        geocodingFailures: geocodingFails.count,
+        routeFailures: routeFails.count,
+        socketFailures: socketFails.count,
+      },
+      averages: {
+        timeToAcceptSeconds: avgTimeToAcceptSeconds,
+        storeToClientSeconds: avgStoreToClientSeconds,
+      },
+      cancellationsByStage: cancellationsByStage.map((row) => ({
+        stage: row.label || 'unknown',
+        count: Number(row.count),
+      })),
+      raw,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
 
 // Dashboard stats com filtros
 router.get('/stats', authenticateToken, requireModerator, async (req: AuthRequest, res: Response) => {

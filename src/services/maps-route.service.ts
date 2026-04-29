@@ -1,5 +1,6 @@
 import { normalizeCoordinatesForBrazilRouting } from '../utils/geo-coordinates';
 import { decodePolyline } from '../utils/polyline';
+import { incrementOpsMetric } from '../utils/ops-metrics';
 
 const ROUTES_V2_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 const LEGACY_DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
@@ -174,6 +175,7 @@ export class MapsRouteService {
       )}?overview=full&geometries=geojson`;
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!res.ok) {
+        await incrementOpsMetric('route_failures_total', 1, 'osrm_http');
         console.warn(`[MapsRouteService] OSRM HTTP ${res.status}`);
         return [];
       }
@@ -183,6 +185,7 @@ export class MapsRouteService {
       try {
         data = (await res.json()) as typeof data;
       } catch (parseErr) {
+        await incrementOpsMetric('route_failures_total', 1, 'osrm_parse');
         console.warn('[MapsRouteService] OSRM JSON inválido:', parseErr);
         return [];
       }
@@ -190,6 +193,7 @@ export class MapsRouteService {
       if (!coords || coords.length < 2) return [];
       return coords.map((c) => ({ lat: c[1], lng: c[0] }));
     } catch (e) {
+      await incrementOpsMetric('route_failures_total', 1, 'osrm_exception');
       console.warn('[MapsRouteService] OSRM exception:', e);
       return [];
     }
@@ -231,6 +235,7 @@ export class MapsRouteService {
         });
 
         if (!res.ok) {
+          await incrementOpsMetric('route_failures_total', 1, `routesv2_http_${travelMode}`);
           const t = await res.text();
           console.warn(`[MapsRouteService] Routes v2 ${travelMode} HTTP ${res.status}: ${t.slice(0, 400)}`);
           continue;
@@ -243,10 +248,12 @@ export class MapsRouteService {
         try {
           data = (await res.json()) as typeof data;
         } catch (parseErr) {
+          await incrementOpsMetric('route_failures_total', 1, `routesv2_parse_${travelMode}`);
           console.warn(`[MapsRouteService] Routes v2 ${travelMode} JSON inválido:`, parseErr);
           continue;
         }
         if (data.error) {
+          await incrementOpsMetric('route_failures_total', 1, `routesv2_api_${travelMode}`);
           console.warn(`[MapsRouteService] Routes v2 ${travelMode} error:`, data.error);
           continue;
         }
@@ -255,6 +262,7 @@ export class MapsRouteService {
         const pts = this.safeDecodePolyline(enc);
         if (pts.length >= 2) return pts;
       } catch (e) {
+        await incrementOpsMetric('route_failures_total', 1, `routesv2_exception_${travelMode}`);
         console.warn(`[MapsRouteService] Routes v2 ${travelMode} exception:`, e);
       }
     }
@@ -277,6 +285,7 @@ export class MapsRouteService {
 
       const res = await fetch(u.toString());
       if (!res.ok) {
+        await incrementOpsMetric('route_failures_total', 1, 'legacy_http');
         console.warn(`[MapsRouteService] Legacy Directions HTTP ${res.status}`);
         return [];
       }
@@ -287,6 +296,7 @@ export class MapsRouteService {
       try {
         data = (await res.json()) as typeof data;
       } catch (parseErr) {
+        await incrementOpsMetric('route_failures_total', 1, 'legacy_parse');
         console.warn('[MapsRouteService] Legacy Directions JSON inválido:', parseErr);
         return [];
       }
@@ -300,6 +310,7 @@ export class MapsRouteService {
       }
       return this.pointsFromLegSteps(route);
     } catch (e) {
+      await incrementOpsMetric('route_failures_total', 1, 'legacy_exception');
       console.warn('[MapsRouteService] Legacy Directions exception:', e);
       return [];
     }
