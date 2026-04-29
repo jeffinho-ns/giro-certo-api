@@ -72,6 +72,78 @@ export class MapsRouteService {
     }
   }
 
+  async getRouteSummary(params: {
+    originLat: number;
+    originLng: number;
+    destLat: number;
+    destLng: number;
+    preferTwoWheeler?: boolean;
+  }): Promise<{
+    points: { lat: number; lng: number }[];
+    distanceMeters: number;
+    durationSeconds: number | null;
+    source: string;
+    travelMode: string;
+  }> {
+    const key = this.getGoogleKey();
+    if (!key) {
+      throw new Error('Google key nao configurada no servidor');
+    }
+    const travelModes = params.preferTwoWheeler
+      ? (['TWO_WHEELER', 'DRIVE'] as const)
+      : (['DRIVE'] as const);
+    for (const travelMode of travelModes) {
+      try {
+        const body = JSON.stringify({
+          origin: {
+            location: {
+              latLng: { latitude: params.originLat, longitude: params.originLng },
+            },
+          },
+          destination: {
+            location: {
+              latLng: { latitude: params.destLat, longitude: params.destLng },
+            },
+          },
+          travelMode,
+          polylineQuality: 'HIGH_QUALITY',
+          polylineEncoding: 'ENCODED_POLYLINE',
+        });
+        const res = await fetch(ROUTES_V2_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': key,
+            'X-Goog-FieldMask': ROUTES_V2_FIELD_MASK,
+          },
+          body,
+        });
+        if (!res.ok) continue;
+        const data = (await res.json()) as {
+          routes?: Array<{
+            distanceMeters?: number;
+            duration?: string;
+            polyline?: { encodedPolyline?: string };
+          }>;
+        };
+        const route = data.routes?.[0];
+        if (!route?.distanceMeters || route.distanceMeters <= 0) continue;
+        const points = this.safeDecodePolyline(route.polyline?.encodedPolyline);
+        const durationSeconds = this.durationToSeconds(route.duration);
+        return {
+          points,
+          distanceMeters: route.distanceMeters,
+          durationSeconds,
+          source: 'GOOGLE_ROUTES_V2',
+          travelMode,
+        };
+      } catch {
+        continue;
+      }
+    }
+    throw new Error('Falha ao calcular rota em Google Routes v2');
+  }
+
   private safeDecodePolyline(encoded: string | undefined | null): { lat: number; lng: number }[] {
     if (!encoded) return [];
     try {
@@ -262,5 +334,12 @@ export class MapsRouteService {
       }
     }
     return all;
+  }
+
+  private durationToSeconds(duration?: string): number | null {
+    if (!duration) return null;
+    if (!duration.endsWith('s')) return null;
+    const n = Number(duration.slice(0, -1));
+    return Number.isFinite(n) ? Math.round(n) : null;
   }
 }

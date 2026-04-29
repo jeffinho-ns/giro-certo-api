@@ -13,9 +13,11 @@ import { AlertService, AlertType, AlertSeverity } from '../services/alert.servic
 import { registerFcmToken, sendPushToUser } from '../services/fcm.service';
 import { ImageEntityType } from '../types';
 import { generateId } from '../utils/id';
-import { ioEmit } from '../utils/socket-events';
+import { ioEmitToRoom } from '../utils/socket-events';
 import { shouldEmitRiderLocationSocket } from '../utils/rider-socket-throttle';
 import { recordDeliveryTrackingIfDue } from '../utils/delivery-tracking-writer';
+import { recordDeliveryRouteHistoryPointIfActive } from '../utils/delivery-route-history-writer';
+import { maybeNotifyOrderEtaTwoMinutes } from '../utils/delivery-proximity-notifier';
 
 const router = Router();
 const imageService = new ImageService();
@@ -376,6 +378,17 @@ router.put('/me/location', authenticateToken, async (req: AuthRequest, res: Resp
       console.warn('[users/me/location] DeliveryTracking:', trackErr);
     }
 
+    let routeHistoryOrderId: string | null = null;
+    try {
+      routeHistoryOrderId = await recordDeliveryRouteHistoryPointIfActive({
+        riderId: req.userId,
+        latitude: data.latitude,
+        longitude: data.longitude,
+      });
+    } catch (historyErr) {
+      console.warn('[users/me/location] DeliveryRouteHistory:', historyErr);
+    }
+
     const activeOrder = await queryOne<{ id: string; status: string }>(
       `SELECT id, status::text AS status FROM "DeliveryOrder"
        WHERE "riderId" = $1 AND status IN ('accepted','arrivedAtStore','inTransit','inProgress')
@@ -383,8 +396,13 @@ router.put('/me/location', authenticateToken, async (req: AuthRequest, res: Resp
        LIMIT 1`,
       [req.userId]
     );
-    if (activeOrder && shouldEmitRiderLocationSocket(req.userId)) {
-      ioEmit(req.app, 'rider:location:update', {
+    if (
+      activeOrder &&
+      shouldEmitRiderLocationSocket(req.userId, {
+        navigationActive: true,
+      })
+    ) {
+      ioEmitToRoom(req.app, `order:${activeOrder.id}`, 'rider:location:update', {
         userId: req.userId,
         lat: data.latitude,
         lng: data.longitude,
@@ -392,6 +410,19 @@ router.put('/me/location', authenticateToken, async (req: AuthRequest, res: Resp
         status: activeOrder.status,
         at: Date.now(),
       });
+    }
+
+    if (routeHistoryOrderId) {
+      try {
+        await maybeNotifyOrderEtaTwoMinutes({
+          orderId: routeHistoryOrderId,
+          riderId: req.userId,
+          riderLat: data.latitude,
+          riderLng: data.longitude,
+        });
+      } catch (etaErr) {
+        console.warn('[users/me/location] ETA push:', etaErr);
+      }
     }
 
     res.json({ message: 'Localização atualizada com sucesso' });

@@ -2,9 +2,11 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { normalizeCoordinatesForBrazilRouting } from '../utils/geo-coordinates';
 import { MapsRouteService } from '../services/maps-route.service';
+import { GooglePlacesService } from '../services/google-places.service';
 
 export class MapsController {
   private readonly mapsRouteService = new MapsRouteService();
+  private readonly googlePlacesService = new GooglePlacesService();
 
   /**
    * GET /api/maps/directions?originLat=&originLng=&destLat=&destLng=
@@ -67,6 +69,36 @@ export class MapsController {
         followsRoads: false,
         code: 'ROUTE_INTERNAL_ERROR',
       });
+    }
+  }
+
+  async autocomplete(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const input = String(req.query.input ?? '').trim();
+      const sessionToken = String(req.query.sessionToken ?? '').trim() || undefined;
+      if (input.length < 3) {
+        res.json({ predictions: [] });
+        return;
+      }
+      const predictions = await this.googlePlacesService.autocomplete(input, sessionToken);
+      res.json({ predictions });
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message ?? 'Falha no autocomplete' });
+    }
+  }
+
+  async placeDetails(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const placeId = String(req.query.placeId ?? '').trim();
+      const sessionToken = String(req.query.sessionToken ?? '').trim() || undefined;
+      if (!placeId) {
+        res.status(400).json({ error: 'placeId obrigatorio' });
+        return;
+      }
+      const place = await this.googlePlacesService.placeDetails(placeId, sessionToken);
+      res.json({ place });
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message ?? 'Falha no place-details' });
     }
   }
 }

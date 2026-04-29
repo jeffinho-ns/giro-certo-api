@@ -6,18 +6,60 @@ import {
   MatchingCriteria,
 } from '../types';
 import { AuthRequest } from '../middleware/auth';
-import { getIo, ioEmit } from '../utils/socket-events';
+import { getIo, ioEmit, ioEmitToRoom } from '../utils/socket-events';
+import { DeliveryPricingService } from '../services/delivery-pricing.service';
 
 const deliveryService = new DeliveryService();
+const deliveryPricingService = new DeliveryPricingService();
 
 export class DeliveryController {
+  private withInternalCode<T extends { id?: string }>(order: T): T & { internalCode: string | null } {
+    const rawId = typeof order?.id === 'string' ? order.id : '';
+    const compact = rawId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    const tail = compact.slice(-8);
+    return {
+      ...order,
+      internalCode: tail ? `GC-${tail}` : null,
+    };
+  }
+
+  private withInternalCodeList<T extends { id?: string }>(orders: T[]): Array<T & { internalCode: string | null }> {
+    return orders.map((o) => this.withInternalCode(o));
+  }
+
+  async quote(req: AuthRequest, res: Response) {
+    try {
+      const {
+        storeLatitude,
+        storeLongitude,
+        deliveryLatitude,
+        deliveryLongitude,
+        priority,
+        urgentBoost,
+      } = req.body || {};
+      const quote = await deliveryPricingService.calculateQuote({
+        storeLatitude: Number(storeLatitude),
+        storeLongitude: Number(storeLongitude),
+        deliveryLatitude: Number(deliveryLatitude),
+        deliveryLongitude: Number(deliveryLongitude),
+        priority: typeof priority === 'string' ? priority : undefined,
+        urgentBoost: urgentBoost === true,
+      });
+      res.json({ quote });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
   async createOrder(req: Request, res: Response) {
     try {
       const data: CreateDeliveryOrderDto = req.body;
       const order = await deliveryService.createOrder(data);
       const { partner: _p, ...orderPlain } = order as any;
-      ioEmit(req.app, 'delivery:update', { order: orderPlain });
-      res.status(201).json(orderPlain);
+      const payload = this.withInternalCode(orderPlain);
+      ioEmit(req.app, 'delivery:update', { order: payload });
+      ioEmitToRoom(req.app, `order:${orderPlain.id}`, 'delivery:update', { order: payload });
+      res.status(201).json(payload);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -80,9 +122,12 @@ export class DeliveryController {
       }
 
       const order = await deliveryService.acceptOrder(orderId, riderId, riderName);
-      ioEmit(req.app, 'delivery:status:changed', { order });
-      ioEmit(req.app, 'delivery:update', { order });
-      res.json(order);
+      const payload = this.withInternalCode(order as any);
+      ioEmit(req.app, 'delivery:status:changed', { order: payload });
+      ioEmit(req.app, 'delivery:update', { order: payload });
+      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:status:changed', { order: payload });
+      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:update', { order: payload });
+      res.json(payload);
     } catch (error: any) {
       if (error?.code === 'ORDER_ALREADY_ACCEPTED') {
         const io = getIo(req.app);
@@ -125,9 +170,12 @@ export class DeliveryController {
       data.riderId = req.userId;
 
       const order = await deliveryService.updateOrderStatus(orderId, data);
-      ioEmit(req.app, 'delivery:status:changed', { order });
-      ioEmit(req.app, 'delivery:update', { order });
-      res.json(order);
+      const payload = this.withInternalCode(order as any);
+      ioEmit(req.app, 'delivery:status:changed', { order: payload });
+      ioEmit(req.app, 'delivery:update', { order: payload });
+      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:status:changed', { order: payload });
+      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:update', { order: payload });
+      res.json(payload);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -144,7 +192,10 @@ export class DeliveryController {
       };
 
       const result = await deliveryService.listOrders(filters);
-      res.json(result);
+      res.json({
+        ...result,
+        orders: this.withInternalCodeList(result.orders as any[]),
+      });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -156,7 +207,19 @@ export class DeliveryController {
         ? req.params.orderId[0]
         : req.params.orderId;
       const order = await deliveryService.getOrderById(orderId);
-      res.json(order);
+      res.json(this.withInternalCode(order as any));
+    } catch (error: any) {
+      res.status(404).json({ error: error.message });
+    }
+  }
+
+  async getOrderRouteHistory(req: Request, res: Response) {
+    try {
+      const orderId = Array.isArray(req.params.orderId)
+        ? req.params.orderId[0]
+        : req.params.orderId;
+      const route = await deliveryService.getOrderRouteHistory(orderId);
+      res.json(route);
     } catch (error: any) {
       res.status(404).json({ error: error.message });
     }

@@ -26,6 +26,11 @@ import alertsRoutes from './routes/alerts.routes';
 import socialRoutes from './routes/social.routes';
 import communitiesRoutes from './routes/communities.routes';
 import mapsRoutes from './routes/maps.routes';
+import { UserRole } from './types';
+import {
+  canJoinOrderTrackingRoom,
+  resolveSocketUserFromToken,
+} from './utils/socket-events';
 
 dotenv.config();
 
@@ -98,22 +103,83 @@ app.use(errorHandler);
 // WebSocket para rastreamento em tempo real
 io.on('connection', (socket) => {
   console.log('Cliente conectado:', socket.id);
+  let socketUserId: string | null = null;
+  let socketUserRole: UserRole | null = null;
+  let socketPartnerId: string | null = null;
 
   socket.on('disconnect', () => {
     console.log('Cliente desconectado:', socket.id);
   });
 
-  socket.on('auth', (data: { userId?: string }) => {
-    const userId = data?.userId;
-    if (userId && typeof userId === 'string') {
-      socket.join(`user:${userId}`);
+  socket.on('auth', async (data: { userId?: string; token?: string }) => {
+    const authHeader = socket.handshake.headers.authorization;
+    const bearerToken =
+      typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7)
+        : null;
+    const tokenFromClient =
+      (typeof data?.token === 'string' && data.token) ||
+      (typeof socket.handshake.auth?.token === 'string'
+        ? socket.handshake.auth.token
+        : null) ||
+      bearerToken;
+    const user = await resolveSocketUserFromToken(tokenFromClient);
+    if (!user) {
+      socket.emit('tracking:error', { message: 'Falha de autenticacao no socket' });
+      return;
+    }
+    socketUserId = user.id;
+    socketUserRole = user.role;
+    socketPartnerId = user.partnerId;
+    socket.join(`user:${user.id}`);
+    if (user.role === UserRole.ADMIN) {
+      socket.join('role:admin');
+    }
+  });
+
+  socket.on('tracking:join-order', async (data: { orderId?: string }) => {
+    const orderId = data?.orderId;
+    if (!orderId || typeof orderId !== 'string') return;
+    if (!socketUserId || !socketUserRole) {
+      socket.emit('tracking:error', { message: 'Socket nao autenticado' });
+      return;
+    }
+    const allowed = await canJoinOrderTrackingRoom(
+      { id: socketUserId, role: socketUserRole, partnerId: socketPartnerId },
+      orderId
+    );
+    if (!allowed) {
+      socket.emit('tracking:error', {
+        message: 'Sem permissao para acompanhar este pedido',
+        orderId,
+      });
+      return;
+    }
+    socket.join(`order:${orderId}`);
+  });
+
+  socket.on('tracking:leave-order', (data: { orderId?: string }) => {
+    const orderId = data?.orderId;
+    if (orderId && typeof orderId === 'string') {
+      socket.leave(`order:${orderId}`);
     }
   });
 
   // Escutar atualizações de localização dos motociclistas
-  socket.on('rider:location', (data) => {
-    // Broadcast para admin e lojistas
-    socket.broadcast.emit('rider:location:update', data);
+  socket.on('rider:location', (data: any) => {
+    if (!socketUserId) return;
+    if (data?.userId && data.userId !== socketUserId) {
+      socket.emit('tracking:error', { message: 'userId invalido no payload de localizacao' });
+      return;
+    }
+    const orderId =
+      data && typeof data.orderId === 'string' && data.orderId.trim().length > 0
+        ? data.orderId.trim()
+        : null;
+    if (!orderId) return;
+    const payload = { ...data, userId: socketUserId };
+    io.to(`order:${orderId}`).emit('rider:location:update', payload);
+    io.to('role:admin').emit('rider:location:update', payload);
   });
 
   // Escutar atualizações de pedidos

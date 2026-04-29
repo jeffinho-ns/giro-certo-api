@@ -6,5 +6,7 @@ const router = Router();
 const mapsController = new MapsController();
 
 router.get('/directions', authenticateToken, mapsController.directions.bind(mapsController));
+router.get('/autocomplete', authenticateToken, mapsController.autocomplete.bind(mapsController));
+router.get('/place-details', authenticateToken, mapsController.placeDetails.bind(mapsController));
 
 export default router;

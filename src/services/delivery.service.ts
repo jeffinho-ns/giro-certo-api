@@ -5,14 +5,25 @@ import { generateId } from '../utils/id';
 import { AlertService, AlertSeverity, AlertType } from './alert.service';
 import { UserRole } from '../types';
 import { sendPushToUser } from './fcm.service';
+import { DeliveryPricingService } from './delivery-pricing.service';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
+  private readonly deliveryPricingService = new DeliveryPricingService();
   /**
    * Criar um novo pedido de delivery
    * Calcula automaticamente a comissão baseada no tipo de assinatura
    */
   async createOrder(data: CreateDeliveryOrderDto) {
+    const quote = await this.deliveryPricingService.calculateQuote({
+      storeLatitude: data.storeLatitude,
+      storeLongitude: data.storeLongitude,
+      deliveryLatitude: data.deliveryLatitude,
+      deliveryLongitude: data.deliveryLongitude,
+      priority: data.priority,
+      urgentBoost: false,
+    });
+
     // Buscar loja/parceiro
     const partner = await queryOne<Partner>(
       'SELECT * FROM "Partner" WHERE id = $1',
@@ -54,7 +65,7 @@ export class DeliveryService {
         data.recipientPhone || null,
         data.notes || null,
         data.value,
-        data.deliveryFee,
+        quote.deliveryFee,
         1.0, // Comissão padrão - será atualizada quando aceito
         status,
         priority,
@@ -392,7 +403,8 @@ export class DeliveryService {
       throw conflictError;
     }
 
-    return updatedOrder;
+    const enrichedOrder = await this.getOrderWithRiderContact(orderId);
+    return enrichedOrder || updatedOrder;
   }
 
   private async handleAcceptanceConflict(
@@ -540,8 +552,44 @@ export class DeliveryService {
     if (nextStatus === DeliveryStatus.arrivedAtStore && updatedOrder) {
       await this.notifyAdminsRiderArrivedAtStore(updatedOrder);
     }
+    if (updatedOrder) {
+      await this.notifyOrderStatusPush(updatedOrder);
+    }
 
     return updatedOrder;
+  }
+
+  private async notifyOrderStatusPush(order: DeliveryOrder): Promise<void> {
+    const storeUsers = await query<{ id: string }>(
+      `SELECT id FROM "User" WHERE "partnerId" = $1`,
+      [order.storeId]
+    );
+    const recipients = new Set<string>(storeUsers.map((u) => u.id));
+    if (order.riderId) recipients.add(order.riderId);
+    if (recipients.size === 0) return;
+
+    const statusLabel: Record<string, string> = {
+      accepted: 'corrida aceita',
+      arrivedAtStore: 'entregador chegou na loja',
+      inTransit: 'entrega em trânsito',
+      inProgress: 'entrega em andamento',
+      completed: 'entrega concluída',
+      cancelled: 'entrega cancelada',
+      pending: 'pedido pendente',
+    };
+    const label = statusLabel[order.status] ?? order.status;
+    for (const userId of recipients) {
+      await sendPushToUser(
+        userId,
+        'Atualização de entrega',
+        `Status atualizado: ${label}.`,
+        {
+          type: 'delivery_status_changed',
+          orderId: order.id,
+          status: String(order.status),
+        }
+      );
+    }
   }
 
   private async notifyAdminsRiderArrivedAtStore(order: DeliveryOrder) {
@@ -688,7 +736,13 @@ export class DeliveryService {
     const limit = filters?.limit || 50;
     const offset = filters?.offset || 0;
 
-    const orders = await query<DeliveryOrder & { partner: Partner; rider: Partial<User> }>(
+    const orders = await query<DeliveryOrder & {
+      partner: Partner;
+      rider: Partial<User>;
+      riderEmail?: string | null;
+      riderPhotoUrl?: string | null;
+      riderPhone?: string | null;
+    }>(
       `SELECT 
         ord.*,
         json_build_object(
@@ -700,7 +754,16 @@ export class DeliveryService {
         CASE 
           WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', u.name, 'email', u.email)
           ELSE NULL
-        END as rider
+        END as rider,
+        u.email as "riderEmail",
+        u."photoUrl" as "riderPhotoUrl",
+        (
+          SELECT dr."emergencyPhone"
+          FROM "DeliveryRegistration" dr
+          WHERE dr."userId" = ord."riderId"
+          ORDER BY dr."createdAt" DESC
+          LIMIT 1
+        ) as "riderPhone"
        FROM "DeliveryOrder" ord
        LEFT JOIN "Partner" p ON p.id = ord."storeId"
        LEFT JOIN "User" u ON u.id = ord."riderId"
@@ -724,7 +787,14 @@ export class DeliveryService {
    * Buscar pedido por ID
    */
   async getOrderById(orderId: string) {
-    const order = await queryOne<DeliveryOrder & { partner: Partner; rider: Partial<User>; tracking: any[] }>(
+    const order = await queryOne<DeliveryOrder & {
+      partner: Partner;
+      rider: Partial<User>;
+      tracking: any[];
+      riderEmail?: string | null;
+      riderPhotoUrl?: string | null;
+      riderPhone?: string | null;
+    }>(
       `SELECT 
         ord.*,
         json_build_object(
@@ -737,6 +807,15 @@ export class DeliveryService {
           WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', u.name, 'email', u.email)
           ELSE NULL
         END as rider,
+        u.email as "riderEmail",
+        u."photoUrl" as "riderPhotoUrl",
+        (
+          SELECT dr."emergencyPhone"
+          FROM "DeliveryRegistration" dr
+          WHERE dr."userId" = ord."riderId"
+          ORDER BY dr."createdAt" DESC
+          LIMIT 1
+        ) as "riderPhone",
         COALESCE(
           json_agg(
             json_build_object(
@@ -765,5 +844,56 @@ export class DeliveryService {
     }
 
     return order;
+  }
+
+  private async getOrderWithRiderContact(orderId: string) {
+    return queryOne<DeliveryOrder & {
+      riderEmail?: string | null;
+      riderPhotoUrl?: string | null;
+      riderPhone?: string | null;
+    }>(
+      `SELECT
+        ord.*,
+        u.email as "riderEmail",
+        u."photoUrl" as "riderPhotoUrl",
+        (
+          SELECT dr."emergencyPhone"
+          FROM "DeliveryRegistration" dr
+          WHERE dr."userId" = ord."riderId"
+          ORDER BY dr."createdAt" DESC
+          LIMIT 1
+        ) as "riderPhone"
+      FROM "DeliveryOrder" ord
+      LEFT JOIN "User" u ON u.id = ord."riderId"
+      WHERE ord.id = $1
+      LIMIT 1`,
+      [orderId]
+    );
+  }
+
+  async getOrderRouteHistory(orderId: string) {
+    const points = await query<{
+      latitude: number;
+      longitude: number;
+      heading: number | null;
+      speed: number | null;
+      timestamp: Date;
+    }>(
+      `SELECT latitude, longitude, heading, speed, timestamp
+       FROM "DeliveryRouteHistory"
+       WHERE "deliveryOrderId" = $1
+       ORDER BY timestamp ASC`,
+      [orderId]
+    );
+    return {
+      orderId,
+      points: points.map((p) => ({
+        lat: p.latitude,
+        lng: p.longitude,
+        heading: p.heading,
+        speed: p.speed,
+        timestamp: p.timestamp,
+      })),
+    };
   }
 }
