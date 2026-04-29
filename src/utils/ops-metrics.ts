@@ -33,19 +33,23 @@ export async function incrementOpsMetric(
   label = ''
 ): Promise<void> {
   if (!metric) return;
-  await ensureTable();
-  const now = new Date();
-  const id = metricId(metric, label, now);
-  const period = dayKey(now);
-  await query(
-    `INSERT INTO "DeliveryOpsMetric" (id, metric, label, period_date, count, sum, "updatedAt")
-     VALUES ($1, $2, $3, $4::date, $5, 0, NOW())
-     ON CONFLICT (metric, label, period_date)
-     DO UPDATE SET
-       count = "DeliveryOpsMetric".count + EXCLUDED.count,
-       "updatedAt" = NOW()`,
-    [id, metric, label, period, by]
-  );
+  try {
+    await ensureTable();
+    const now = new Date();
+    const id = metricId(metric, label, now);
+    const period = dayKey(now);
+    await query(
+      `INSERT INTO "DeliveryOpsMetric" (id, metric, label, period_date, count, sum, "updatedAt")
+       VALUES ($1, $2, $3, $4::date, $5, 0, NOW())
+       ON CONFLICT (metric, label, period_date)
+       DO UPDATE SET
+         count = "DeliveryOpsMetric".count + EXCLUDED.count,
+         "updatedAt" = NOW()`,
+      [id, metric, label, period, by]
+    );
+  } catch (err) {
+    console.warn('[ops-metrics] increment falhou (nao bloqueante):', err);
+  }
 }
 
 export async function observeOpsMetric(
@@ -54,20 +58,24 @@ export async function observeOpsMetric(
   label = ''
 ): Promise<void> {
   if (!metric || !Number.isFinite(value) || value < 0) return;
-  await ensureTable();
-  const now = new Date();
-  const id = metricId(metric, label, now);
-  const period = dayKey(now);
-  await query(
-    `INSERT INTO "DeliveryOpsMetric" (id, metric, label, period_date, count, sum, "updatedAt")
-     VALUES ($1, $2, $3, $4::date, 1, $5, NOW())
-     ON CONFLICT (metric, label, period_date)
-     DO UPDATE SET
-       count = "DeliveryOpsMetric".count + 1,
-       sum = "DeliveryOpsMetric".sum + EXCLUDED.sum,
-       "updatedAt" = NOW()`,
-    [id, metric, label, period, value]
-  );
+  try {
+    await ensureTable();
+    const now = new Date();
+    const id = metricId(metric, label, now);
+    const period = dayKey(now);
+    await query(
+      `INSERT INTO "DeliveryOpsMetric" (id, metric, label, period_date, count, sum, "updatedAt")
+       VALUES ($1, $2, $3, $4::date, 1, $5, NOW())
+       ON CONFLICT (metric, label, period_date)
+       DO UPDATE SET
+         count = "DeliveryOpsMetric".count + 1,
+         sum = "DeliveryOpsMetric".sum + EXCLUDED.sum,
+         "updatedAt" = NOW()`,
+      [id, metric, label, period, value]
+    );
+  } catch (err) {
+    console.warn('[ops-metrics] observe falhou (nao bloqueante):', err);
+  }
 }
 
 type RollupRow = {
@@ -78,15 +86,20 @@ type RollupRow = {
 };
 
 export async function getOpsMetricsForDays(days: number): Promise<RollupRow[]> {
-  await ensureTable();
-  const safeDays = Math.max(1, Math.min(days, 90));
-  return query<RollupRow>(
-    `SELECT metric, label, SUM(count)::text as count, SUM(sum)::text as sum
-     FROM "DeliveryOpsMetric"
-     WHERE period_date >= (CURRENT_DATE - ($1::int - 1))
-     GROUP BY metric, label`,
-    [safeDays]
-  );
+  try {
+    await ensureTable();
+    const safeDays = Math.max(1, Math.min(days, 90));
+    return query<RollupRow>(
+      `SELECT metric, label, SUM(count)::text as count, SUM(sum)::text as sum
+       FROM "DeliveryOpsMetric"
+       WHERE period_date >= (CURRENT_DATE - ($1::int - 1))
+       GROUP BY metric, label`,
+      [safeDays]
+    );
+  } catch (err) {
+    console.warn('[ops-metrics] leitura falhou (nao bloqueante):', err);
+    return [];
+  }
 }
 
 export async function getOpsMetricValue(
@@ -94,18 +107,23 @@ export async function getOpsMetricValue(
   days: number,
   label = ''
 ): Promise<{ count: number; sum: number }> {
-  await ensureTable();
-  const safeDays = Math.max(1, Math.min(days, 90));
-  const row = await queryOne<{ count: string; sum: string }>(
-    `SELECT COALESCE(SUM(count), 0)::text as count, COALESCE(SUM(sum), 0)::text as sum
-     FROM "DeliveryOpsMetric"
-     WHERE metric = $1
-       AND label = $2
-       AND period_date >= (CURRENT_DATE - ($3::int - 1))`,
-    [metric, label, safeDays]
-  );
-  return {
-    count: Number(row?.count ?? '0'),
-    sum: Number(row?.sum ?? '0'),
-  };
+  try {
+    await ensureTable();
+    const safeDays = Math.max(1, Math.min(days, 90));
+    const row = await queryOne<{ count: string; sum: string }>(
+      `SELECT COALESCE(SUM(count), 0)::text as count, COALESCE(SUM(sum), 0)::text as sum
+       FROM "DeliveryOpsMetric"
+       WHERE metric = $1
+         AND label = $2
+         AND period_date >= (CURRENT_DATE - ($3::int - 1))`,
+      [metric, label, safeDays]
+    );
+    return {
+      count: Number(row?.count ?? '0'),
+      sum: Number(row?.sum ?? '0'),
+    };
+  } catch (err) {
+    console.warn('[ops-metrics] agregacao falhou (nao bloqueante):', err);
+    return { count: 0, sum: 0 };
+  }
 }
