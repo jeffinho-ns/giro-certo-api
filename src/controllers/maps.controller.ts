@@ -4,6 +4,21 @@ import { normalizeCoordinatesForBrazilRouting } from '../utils/geo-coordinates';
 import { MapsRouteService } from '../services/maps-route.service';
 import { GooglePlacesService } from '../services/google-places.service';
 
+type OfflineRegion = {
+  id: string;
+  name: string;
+  state: string;
+  version: string;
+  estimatedSizeMb: number;
+  downloadUrl: string | null;
+  bounds: {
+    north: number;
+    south: number;
+    east: number;
+    west: number;
+  };
+};
+
 export class MapsController {
   private readonly mapsRouteService = new MapsRouteService();
   private readonly googlePlacesService = new GooglePlacesService();
@@ -99,6 +114,50 @@ export class MapsController {
       res.json({ place });
     } catch (e: any) {
       res.status(400).json({ error: e?.message ?? 'Falha no place-details' });
+    }
+  }
+
+  async offlineRegions(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const configured = process.env.OFFLINE_MAP_REGIONS_JSON;
+      if (configured) {
+        const parsed = JSON.parse(configured) as OfflineRegion[];
+        res.json({ regions: parsed, source: 'env' });
+        return;
+      }
+
+      const regions: OfflineRegion[] = [
+        {
+          id: 'sp-capital',
+          name: 'Sao Paulo (Capital)',
+          state: 'SP',
+          version: '2026.04',
+          estimatedSizeMb: 280,
+          downloadUrl: process.env.OFFLINE_MAP_SP_CAPITAL_URL ?? null,
+          bounds: { north: -23.356, south: -23.815, east: -46.365, west: -46.826 },
+        },
+        {
+          id: 'campinas-regiao',
+          name: 'Campinas e Regiao',
+          state: 'SP',
+          version: '2026.04',
+          estimatedSizeMb: 210,
+          downloadUrl: process.env.OFFLINE_MAP_CAMPINAS_URL ?? null,
+          bounds: { north: -22.65, south: -23.15, east: -46.7, west: -47.4 },
+        },
+        {
+          id: 'rio-capital',
+          name: 'Rio de Janeiro (Capital)',
+          state: 'RJ',
+          version: '2026.04',
+          estimatedSizeMb: 240,
+          downloadUrl: process.env.OFFLINE_MAP_RIO_CAPITAL_URL ?? null,
+          bounds: { north: -22.74, south: -23.15, east: -43.1, west: -43.8 },
+        },
+      ];
+      res.json({ regions, source: 'default' });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message ?? 'Falha ao listar regioes offline' });
     }
   }
 }
