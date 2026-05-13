@@ -549,6 +549,17 @@ export class DeliveryService {
       }
     }
 
+    if (nextStatus === DeliveryStatus.completed) {
+      const expected = this.getExpectedDeliveryProofPin(order);
+      const received = (data.deliveryPin || '').replace(/\D/g, '');
+      if (received.length !== 4 || received !== expected) {
+        await incrementOpsMetric('delivery_proof_pin_failed_total');
+        throw new Error(
+          'PIN de entrega invalido. Confirme os ultimos 4 digitos do telefone do cliente.'
+        );
+      }
+    }
+
     let updateQuery = 'UPDATE "DeliveryOrder" SET status = $1';
     const params: any[] = [nextStatus];
 
@@ -1008,6 +1019,22 @@ export class DeliveryService {
   private getInternalCode(orderId: string): string {
     const compact = (orderId || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
     return `GC-${compact.slice(-8)}`;
+  }
+
+  private getExpectedDeliveryProofPin(order: DeliveryOrder): string {
+    const phoneDigits = (order.recipientPhone || '').replace(/\D/g, '');
+    if (phoneDigits.length >= 4) {
+      return phoneDigits.slice(-4);
+    }
+
+    const idDigits = (order.id || '').replace(/\D/g, '');
+    if (idDigits.length >= 4) {
+      return idDigits.slice(-4);
+    }
+
+    throw new Error(
+      'Pedido sem telefone do destinatario para validar a entrega.'
+    );
   }
 
   private async ensureIdempotencyTable(): Promise<void> {

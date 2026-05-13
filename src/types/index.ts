@@ -179,6 +179,7 @@ export interface UpdateDeliveryStatusDto {
   riderId?: string;
   riderName?: string;
   pickupCode?: string;
+  deliveryPin?: string;
   idempotencyKey?: string;
 }
 
