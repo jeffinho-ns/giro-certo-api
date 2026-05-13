@@ -27,6 +27,19 @@ export class DeliveryController {
     return orders.map((o) => this.withInternalCode(o));
   }
 
+  private withoutInternalCode<T extends { internalCode?: string | null }>(order: T): Omit<T, 'internalCode'> {
+    const { internalCode: _ignored, ...rest } = order;
+    return rest;
+  }
+
+  private riderFacingOrder<T extends { id?: string }>(order: T) {
+    return this.withoutInternalCode(this.withInternalCode(order));
+  }
+
+  private riderFacingOrderList<T extends { id?: string }>(orders: T[]) {
+    return orders.map((order) => this.riderFacingOrder(order));
+  }
+
   async quote(req: AuthRequest, res: Response) {
     try {
       const {
@@ -133,7 +146,7 @@ export class DeliveryController {
       ioEmit(req.app, 'delivery:update', { order: payload });
       ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:status:changed', { order: payload });
       ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:update', { order: payload });
-      res.json(payload);
+      res.json(this.riderFacingOrder(order as any));
     } catch (error: any) {
       if (error?.code === 'ORDER_ALREADY_ACCEPTED') {
         const io = getIo(req.app);
@@ -182,7 +195,7 @@ export class DeliveryController {
       ioEmit(req.app, 'delivery:update', { order: payload });
       ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:status:changed', { order: payload });
       ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:update', { order: payload });
-      res.json(payload);
+      res.json(this.riderFacingOrder(order as any));
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -199,9 +212,12 @@ export class DeliveryController {
       };
 
       const result = await deliveryService.listOrders(filters);
+      const orders = filters.storeId
+        ? this.withInternalCodeList(result.orders as any[])
+        : this.riderFacingOrderList(result.orders as any[]);
       res.json({
         ...result,
-        orders: this.withInternalCodeList(result.orders as any[]),
+        orders,
       });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
