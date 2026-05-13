@@ -70,6 +70,11 @@ export class DeliveryController {
       const order = await deliveryService.createOrder(data);
       const { partner: _p, ...orderPlain } = order as any;
       const payload = this.withInternalCode(orderPlain);
+      void deliveryService
+        .emitLiveDeliveryOffers(req.app, order as any)
+        .catch((err) => {
+          console.warn('[DeliveryController] socket offer falhou:', err);
+        });
       ioEmit(req.app, 'delivery:update', { order: payload });
       ioEmitToRoom(req.app, `order:${orderPlain.id}`, 'delivery:update', { order: payload });
       res.status(201).json(payload);

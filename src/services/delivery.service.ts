@@ -1,4 +1,5 @@
 import { query, queryOne, transaction } from '../lib/db';
+import type { Application } from 'express';
 import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria, DeliveryStatus, DeliveryOrder, User, Partner, Wallet, TransactionType, TransactionStatus, VehicleType, MaintenanceStatus } from '../types';
 import { calculateDistance } from '../utils/haversine';
 import { generateId } from '../utils/id';
@@ -7,6 +8,7 @@ import { UserRole } from '../types';
 import { sendPushToUser } from './fcm.service';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { incrementOpsMetric, observeOpsMetric } from '../utils/ops-metrics';
+import { ioEmitToRoom } from '../utils/socket-events';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
@@ -673,6 +675,56 @@ export class DeliveryService {
         })
       )
     );
+  }
+
+  async emitLiveDeliveryOffers(
+    app: Application,
+    order: DeliveryOrder
+  ): Promise<void> {
+    const matching = await this.findMatchingRiders({
+      latitude: order.storeLatitude,
+      longitude: order.storeLongitude,
+      radius: 7,
+      storeLatitude: order.storeLatitude,
+      storeLongitude: order.storeLongitude,
+      deliveryLatitude: order.deliveryLatitude,
+      deliveryLongitude: order.deliveryLongitude,
+    });
+
+    const available = matching.filter((r) => (r.activeOrders || 0) === 0);
+    if (available.length === 0) return;
+
+    const offerOrder = {
+      id: order.id,
+      storeId: order.storeId,
+      storeName: order.storeName,
+      storeAddress: order.storeAddress,
+      storeLatitude: order.storeLatitude,
+      storeLongitude: order.storeLongitude,
+      deliveryAddress: order.deliveryAddress,
+      deliveryLatitude: order.deliveryLatitude,
+      deliveryLongitude: order.deliveryLongitude,
+      recipientName: order.recipientName ?? null,
+      recipientPhone: order.recipientPhone ?? null,
+      notes: order.notes ?? null,
+      value: Number(order.value),
+      deliveryFee: Number(order.deliveryFee),
+      status: order.status,
+      priority: order.priority,
+      createdAt:
+        order.createdAt instanceof Date
+          ? order.createdAt.toISOString()
+          : order.createdAt,
+    };
+
+    for (const rider of available.slice(0, 40)) {
+      ioEmitToRoom(app, `user:${rider.id}`, 'delivery:new_order_offer', {
+        order: offerOrder,
+        distanceToStoreKm: rider.distance,
+        routeDistanceKm: rider.deliveryDistance,
+        expiresInSeconds: 15,
+      });
+    }
   }
 
   private async notifyMatchingRidersAboutNewOrder(
