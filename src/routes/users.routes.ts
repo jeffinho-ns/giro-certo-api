@@ -396,10 +396,14 @@ router.put('/me/location', authenticateToken, async (req: AuthRequest, res: Resp
        LIMIT 1`,
       [req.userId]
     );
+    const navigationActive =
+      typeof data.navigationActive === 'boolean'
+        ? data.navigationActive
+        : !!activeOrder;
     if (
       activeOrder &&
       shouldEmitRiderLocationSocket(req.userId, {
-        navigationActive: true,
+        navigationActive,
       })
     ) {
       ioEmitToRoom(req.app, `order:${activeOrder.id}`, 'rider:location:update', {

@@ -1,7 +1,12 @@
 /** Evita flood de eventos WebSocket a cada tick de GPS (PUT /me/location). */
 const lastEmitMs = new Map<string, number>();
 const MIN_INTERVAL_MS = 8000;
-const NAVIGATION_INTERVAL_MS = 1500;
+const NAVIGATION_INTERVAL_MS = 4000;
+
+/** Atualiza o relógio de throttle (ex.: após emit forçado por checkpoint). */
+export function touchRiderLocationSocketThrottle(userId: string): void {
+  lastEmitMs.set(userId, Date.now());
+}
 
 export function shouldEmitRiderLocationSocket(
   userId: string,

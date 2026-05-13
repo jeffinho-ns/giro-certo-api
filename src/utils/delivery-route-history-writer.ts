@@ -25,6 +25,9 @@ async function ensureTable(): Promise<void> {
   tableEnsured = true;
 }
 
+const MIN_ROUTE_HISTORY_POINT_MS = 30_000;
+const lastRouteHistoryInsertByOrderId = new Map<string, number>();
+
 export async function recordDeliveryRouteHistoryPointIfActive(params: {
   riderId: string;
   latitude: number;
@@ -41,6 +44,14 @@ export async function recordDeliveryRouteHistoryPointIfActive(params: {
     [params.riderId]
   );
   if (!order) return null;
+
+  const now = Date.now();
+  const prev = lastRouteHistoryInsertByOrderId.get(order.id) ?? 0;
+  if (now - prev < MIN_ROUTE_HISTORY_POINT_MS) {
+    return null;
+  }
+  lastRouteHistoryInsertByOrderId.set(order.id, now);
+
   await query(
     `INSERT INTO "DeliveryRouteHistory"
       (id, "deliveryOrderId", "riderId", latitude, longitude, heading, speed, source, timestamp)

@@ -219,6 +219,8 @@ export interface UpdateUserLocationDto {
   latitude: number;
   longitude: number;
   isOnline?: boolean;
+  /** Quando true, emissões WebSocket para a torre usam intervalo curto (navegação ativa). */
+  navigationActive?: boolean;
 }
 
 export interface MatchingCriteria {

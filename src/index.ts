@@ -32,6 +32,7 @@ import {
   resolveSocketUserFromToken,
 } from './utils/socket-events';
 import { incrementOpsMetric } from './utils/ops-metrics';
+import { persistRiderLocationFromSocketEvent } from './services/rider-location-persist.service';
 
 dotenv.config();
 
@@ -169,7 +170,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Escutar atualizações de localização dos motociclistas
+  // Escutar atualizações de localização dos motociclistas (persistência + broadcast com estrangulamento)
   socket.on('rider:location', (data: any) => {
     if (!socketUserId) return;
     if (data?.userId && data.userId !== socketUserId) {
@@ -182,9 +183,22 @@ io.on('connection', (socket) => {
         ? data.orderId.trim()
         : null;
     if (!orderId) return;
-    const payload = { ...data, userId: socketUserId };
-    io.to(`order:${orderId}`).emit('rider:location:update', payload);
-    io.to('role:admin').emit('rider:location:update', payload);
+    const latRaw = data?.lat;
+    const lngRaw = data?.lng;
+    const lat = typeof latRaw === 'number' ? latRaw : parseFloat(String(latRaw ?? ''));
+    const lng = typeof lngRaw === 'number' ? lngRaw : parseFloat(String(lngRaw ?? ''));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+    void persistRiderLocationFromSocketEvent(app, {
+      userId: socketUserId,
+      latitude: lat,
+      longitude: lng,
+      orderId,
+      status: typeof data?.status === 'string' ? data.status : null,
+      forceImmediate: data?.checkpoint === true,
+    }).catch((err) => {
+      console.warn('[rider:location] persist:', err);
+    });
   });
 
   // Escutar atualizações de pedidos
