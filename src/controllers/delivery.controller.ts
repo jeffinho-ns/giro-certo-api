@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import type { Application } from 'express';
 import { DeliveryService } from '../services/delivery.service';
 import {
   CreateDeliveryOrderDto,
@@ -81,6 +82,27 @@ export class DeliveryController {
     return orders.map((order) => this.riderFacingOrder(order));
   }
 
+  private broadcastOrderLifecycleUpdate(
+    app: Application,
+    order: { id?: string; storeId?: string }
+  ) {
+    const payload = this.withInternalCode(order as any);
+    const envelope = { order: payload };
+    const orderId = typeof order.id === 'string' ? order.id : '';
+    const storeId = typeof order.storeId === 'string' ? order.storeId : '';
+
+    ioEmit(app, 'delivery:update', envelope);
+    ioEmit(app, 'delivery:status:changed', envelope);
+    if (orderId) {
+      ioEmitToRoom(app, `order:${orderId}`, 'delivery:update', envelope);
+      ioEmitToRoom(app, `order:${orderId}`, 'delivery:status:changed', envelope);
+    }
+    if (storeId) {
+      ioEmitToRoom(app, `store:${storeId}`, 'delivery:update', envelope);
+      ioEmitToRoom(app, `store:${storeId}`, 'delivery:status:changed', envelope);
+    }
+  }
+
   async quote(req: AuthRequest, res: Response) {
     try {
       const {
@@ -110,10 +132,8 @@ export class DeliveryController {
       const data: CreateDeliveryOrderDto = req.body;
       const order = await deliveryService.createOrder(data);
       const { partner: _p, ...orderPlain } = order as any;
-      const payload = this.withInternalCode(orderPlain);
-      ioEmit(req.app, 'delivery:update', { order: payload });
-      ioEmitToRoom(req.app, `order:${orderPlain.id}`, 'delivery:update', { order: payload });
-      res.status(201).json(payload);
+      this.broadcastOrderLifecycleUpdate(req.app, orderPlain);
+      res.status(201).json(this.withInternalCode(orderPlain));
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -148,8 +168,7 @@ export class DeliveryController {
 
       const { partner: _p, ...orderPlain } = result.order as any;
       const payload = this.withInternalCode(orderPlain);
-      ioEmit(req.app, 'delivery:update', { order: payload });
-      ioEmitToRoom(req.app, `order:${orderPlain.id}`, 'delivery:update', { order: payload });
+      this.broadcastOrderLifecycleUpdate(req.app, orderPlain);
 
       res.status(201).json({
         created: true,
@@ -186,8 +205,7 @@ export class DeliveryController {
       }
 
       const payload = this.withInternalCode(order as any);
-      ioEmit(req.app, 'delivery:update', { order: payload });
-      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:update', { order: payload });
+      this.broadcastOrderLifecycleUpdate(req.app, order as any);
 
       res.json({
         dispatched: true,
@@ -282,11 +300,7 @@ export class DeliveryController {
         riderName,
         idempotencyKey
       );
-      const payload = this.withInternalCode(order as any);
-      ioEmit(req.app, 'delivery:status:changed', { order: payload });
-      ioEmit(req.app, 'delivery:update', { order: payload });
-      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:status:changed', { order: payload });
-      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:update', { order: payload });
+      this.broadcastOrderLifecycleUpdate(req.app, order as any);
       res.json(this.riderFacingOrder(order as any));
     } catch (error: any) {
       if (error?.code === 'ORDER_ALREADY_ACCEPTED') {
@@ -331,11 +345,7 @@ export class DeliveryController {
       data.idempotencyKey = req.header('x-idempotency-key') || undefined;
 
       const order = await deliveryService.updateOrderStatus(orderId, data);
-      const payload = this.withInternalCode(order as any);
-      ioEmit(req.app, 'delivery:status:changed', { order: payload });
-      ioEmit(req.app, 'delivery:update', { order: payload });
-      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:status:changed', { order: payload });
-      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:update', { order: payload });
+      this.broadcastOrderLifecycleUpdate(req.app, order as any);
       res.json(this.riderFacingOrder(order as any));
     } catch (error: any) {
       res.status(400).json({ error: error.message });

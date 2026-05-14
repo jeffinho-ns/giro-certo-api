@@ -137,6 +137,9 @@ io.on('connection', (socket) => {
     socketUserRole = user.role;
     socketPartnerId = user.partnerId;
     socket.join(`user:${user.id}`);
+    if (user.partnerId) {
+      socket.join(`store:${user.partnerId}`);
+    }
     if (user.role === UserRole.ADMIN) {
       socket.join('role:admin');
     }
