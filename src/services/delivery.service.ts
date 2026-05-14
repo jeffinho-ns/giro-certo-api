@@ -164,8 +164,11 @@ export class DeliveryService {
       throw new Error('Pedido nao encontrado');
     }
 
-    if (order.status !== DeliveryStatus.awaiting_dispatch) {
-      throw new Error('Pedido nao esta aguardando despacho');
+    const currentStatus = this.normalizeOrderStatus(order.status);
+    if (currentStatus !== DeliveryStatus.awaiting_dispatch) {
+      throw new Error(
+        `Status invalido para despacho: ${currentStatus || 'desconhecido'}`
+      );
     }
 
     const updatedRows = await query<DeliveryOrder>(
@@ -179,10 +182,9 @@ export class DeliveryService {
 
     const updatedOrder = updatedRows[0];
     if (!updatedOrder) {
-      throw new Error('Pedido nao esta aguardando despacho');
+      throw new Error('Status invalido para despacho: pedido nao esta aguardando despacho');
     }
 
-    await this.announceOrderToRiders(updatedOrder);
     return updatedOrder;
   }
 
@@ -249,7 +251,7 @@ export class DeliveryService {
       `SELECT 
         u.*,
         w.* as wallet,
-        COUNT(DISTINCT CASE WHEN do.status IN ('accepted', 'arrivedAtStore', 'inTransit', 'inProgress') THEN do.id END) as "activeOrders",
+        COUNT(DISTINCT CASE WHEN rdo.status IN ('accepted', 'arrivedAtStore', 'inTransit', 'inProgress') THEN rdo.id END) as "activeOrders",
         COALESCE(AVG(r.rating), 0) as "averageRating",
         -- Buscar bike principal do entregador
         (
@@ -272,7 +274,7 @@ export class DeliveryService {
         ) as "hasCriticalMaintenance"
        FROM "User" u
        LEFT JOIN "Wallet" w ON w."userId" = u.id
-       LEFT JOIN "DeliveryOrder" do ON do."riderId" = u.id
+       LEFT JOIN "DeliveryOrder" rdo ON rdo."riderId" = u.id
        LEFT JOIN "Rating" r ON r."userId" = u.id AND r."deliveryOrderId" IS NOT NULL
        WHERE u."isOnline" = true 
          AND u."currentLat" IS NOT NULL 
@@ -1158,6 +1160,10 @@ export class DeliveryService {
         timestamp: p.timestamp,
       })),
     };
+  }
+
+  private normalizeOrderStatus(status: unknown): string {
+    return String(status ?? '').trim();
   }
 
   private getInternalCode(orderId: string): string {

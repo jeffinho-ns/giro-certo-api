@@ -47,7 +47,9 @@ export class DeliveryController {
     if (user.role === UserRole.ADMIN) {
       return;
     }
-    if (user.partnerId !== storeId) {
+    const userStoreId = user.partnerId == null ? '' : String(user.partnerId);
+    const orderStoreId = String(storeId ?? '');
+    if (!userStoreId || userStoreId !== orderStoreId) {
       throw new Error('Sem permissao para operar este pedido');
     }
   }
@@ -164,15 +166,24 @@ export class DeliveryController {
   }
 
   async dispatchOrder(req: AuthRequest, res: Response) {
+    const orderId = Array.isArray(req.params.orderId)
+      ? req.params.orderId[0]
+      : req.params.orderId;
+
     try {
-      const orderId = Array.isArray(req.params.orderId)
-        ? req.params.orderId[0]
-        : req.params.orderId;
       const existing = await deliveryService.getOrderById(orderId);
       await this.assertCanManageOrder(req, existing.storeId);
 
       const order = await deliveryService.dispatchOrder(orderId);
-      await deliveryService.announceOrderToRiders(order, req.app);
+      try {
+        await deliveryService.announceOrderToRiders(order, req.app);
+      } catch (announceError: any) {
+        console.error('[dispatchOrder] Falha ao notificar entregadores', {
+          orderId,
+          userId: req.userId,
+          message: announceError?.message,
+        });
+      }
 
       const payload = this.withInternalCode(order as any);
       ioEmit(req.app, 'delivery:update', { order: payload });
@@ -183,7 +194,28 @@ export class DeliveryController {
         order: payload,
       });
     } catch (error: any) {
-      res.status(400).json({ error: error.message });
+      const message = error?.message || 'Erro ao despachar pedido';
+      console.error('[dispatchOrder]', {
+        orderId,
+        userId: req.userId,
+        message,
+        stack: error?.stack,
+      });
+
+      if (message.includes('nao encontrado') || message.includes('não encontrado')) {
+        return res.status(404).json({ error: message });
+      }
+      if (message.includes('permissao') || message.includes('permissão')) {
+        return res.status(403).json({ error: message });
+      }
+      if (message.includes('aguardando despacho') || message.includes('Status invalido')) {
+        return res.status(409).json({
+          error: message,
+          code: 'DISPATCH_INVALID_STATUS',
+        });
+      }
+
+      return res.status(400).json({ error: message });
     }
   }
 
