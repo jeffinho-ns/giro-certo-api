@@ -276,7 +276,13 @@ export class DeliveryService {
        LEFT JOIN "Wallet" w ON w."userId" = u.id
        LEFT JOIN "DeliveryOrder" rdo ON rdo."riderId" = u.id
        LEFT JOIN "Rating" r ON r."userId" = u.id AND r."deliveryOrderId" IS NOT NULL
-       WHERE u."isOnline" = true 
+       WHERE (
+         u."isOnline" = true
+         OR (
+           u."lastLocationUpdate" IS NOT NULL
+           AND u."lastLocationUpdate" >= NOW() - INTERVAL '30 minutes'
+         )
+       )
          AND u."currentLat" IS NOT NULL 
          AND u."currentLng" IS NOT NULL
          AND COALESCE(u."deliveryRiderBlocked", false) = false
@@ -847,7 +853,74 @@ export class DeliveryService {
     const available = matching.filter((r) => (r.activeOrders || 0) === 0);
     if (available.length === 0) return;
 
-    const offerOrder = {
+    const offerOrder = this.buildDeliveryOfferOrder(order);
+
+    for (const rider of available.slice(0, 40)) {
+      ioEmitToRoom(app, `user:${rider.id}`, 'delivery:new_order_offer', {
+        order: offerOrder,
+        distanceToStoreKm: rider.distance,
+        routeDistanceKm: rider.deliveryDistance,
+        expiresInSeconds: 15,
+      });
+    }
+  }
+
+  async replayPendingOffersForRider(
+    app: Application,
+    riderId: string
+  ): Promise<void> {
+    const rider = await queryOne<User>('SELECT * FROM "User" WHERE id = $1', [riderId]);
+    if (!rider?.currentLat || !rider?.currentLng) {
+      return;
+    }
+
+    const activeOrder = await queryOne<{ id: string }>(
+      `SELECT id FROM "DeliveryOrder"
+       WHERE "riderId" = $1
+         AND status IN ('accepted','arrivedAtStore','inTransit','inProgress')
+       LIMIT 1`,
+      [riderId]
+    );
+    if (activeOrder) {
+      return;
+    }
+
+    const orders = await query<DeliveryOrder>(
+      `SELECT * FROM "DeliveryOrder"
+       WHERE status = $1
+         AND "riderId" IS NULL
+       ORDER BY "createdAt" DESC
+       LIMIT 8`,
+      [DeliveryStatus.pending]
+    );
+
+    for (const order of orders) {
+      const matching = await this.findMatchingRiders({
+        latitude: order.storeLatitude,
+        longitude: order.storeLongitude,
+        radius: 7,
+        storeLatitude: order.storeLatitude,
+        storeLongitude: order.storeLongitude,
+        deliveryLatitude: order.deliveryLatitude,
+        deliveryLongitude: order.deliveryLongitude,
+      });
+      const entry = matching.find((candidate) => candidate.id === riderId);
+      if (!entry || (entry.activeOrders || 0) > 0) {
+        continue;
+      }
+
+      ioEmitToRoom(app, `user:${riderId}`, 'delivery:new_order_offer', {
+        order: this.buildDeliveryOfferOrder(order),
+        distanceToStoreKm: entry.distance,
+        routeDistanceKm: entry.deliveryDistance,
+        expiresInSeconds: 15,
+      });
+      return;
+    }
+  }
+
+  private buildDeliveryOfferOrder(order: DeliveryOrder) {
+    return {
       id: order.id,
       storeId: order.storeId,
       storeName: order.storeName,
@@ -869,15 +942,6 @@ export class DeliveryService {
           ? order.createdAt.toISOString()
           : order.createdAt,
     };
-
-    for (const rider of available.slice(0, 40)) {
-      ioEmitToRoom(app, `user:${rider.id}`, 'delivery:new_order_offer', {
-        order: offerOrder,
-        distanceToStoreKm: rider.distance,
-        routeDistanceKm: rider.deliveryDistance,
-        expiresInSeconds: 15,
-      });
-    }
   }
 
   private async notifyMatchingRidersAboutNewOrder(

@@ -22,7 +22,7 @@ export async function persistRiderLocationFromSocketEvent(
     userId: string;
     latitude: number;
     longitude: number;
-    orderId: string;
+    orderId: string | null;
     status?: string | null;
     /** Ex.: após PUT de marco no app — ignora throttle longo, com limite curto próprio. */
     forceImmediate?: boolean;
@@ -45,7 +45,11 @@ export async function persistRiderLocationFromSocketEvent(
 
   await query(
     `UPDATE "User"
-     SET "currentLat" = $1, "currentLng" = $2, "lastLocationUpdate" = NOW(), "updatedAt" = NOW()
+     SET "currentLat" = $1,
+         "currentLng" = $2,
+         "isOnline" = true,
+         "lastLocationUpdate" = NOW(),
+         "updatedAt" = NOW()
      WHERE id = $3`,
     [params.latitude, params.longitude, params.userId]
   );
@@ -67,10 +71,11 @@ export async function persistRiderLocationFromSocketEvent(
   }
 
   if (
-    params.forceImmediate ||
-    shouldEmitRiderLocationSocket(params.userId, {
-      navigationActive: true,
-    })
+    params.orderId &&
+    (params.forceImmediate ||
+      shouldEmitRiderLocationSocket(params.userId, {
+        navigationActive: true,
+      }))
   ) {
     const payload = {
       userId: params.userId,

@@ -27,6 +27,7 @@ import socialRoutes from './routes/social.routes';
 import communitiesRoutes from './routes/communities.routes';
 import mapsRoutes from './routes/maps.routes';
 import { UserRole } from './types';
+import { DeliveryService } from './services/delivery.service';
 import {
   canJoinOrderTrackingRoom,
   resolveSocketUserFromToken,
@@ -52,6 +53,7 @@ const io = new Server(httpServer, {
 app.set('io', io);
 
 const PORT = process.env.PORT || 3001;
+const deliveryService = new DeliveryService();
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -138,6 +140,11 @@ io.on('connection', (socket) => {
     if (user.role === UserRole.ADMIN) {
       socket.join('role:admin');
     }
+    void deliveryService
+      .replayPendingOffersForRider(app, user.id)
+      .catch((err) => {
+        console.warn('[socket auth] replay pending offers:', err);
+      });
   });
 
   socket.on('tracking:join-order', async (data: { orderId?: string }) => {
@@ -182,7 +189,6 @@ io.on('connection', (socket) => {
       data && typeof data.orderId === 'string' && data.orderId.trim().length > 0
         ? data.orderId.trim()
         : null;
-    if (!orderId) return;
     const latRaw = data?.lat;
     const lngRaw = data?.lng;
     const lat = typeof latRaw === 'number' ? latRaw : parseFloat(String(latRaw ?? ''));
