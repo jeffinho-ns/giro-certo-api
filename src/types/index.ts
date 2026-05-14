@@ -76,10 +76,12 @@ export enum DisputeType {
 }
 
 export enum DeliveryStatus {
+  awaiting_dispatch = 'awaiting_dispatch',
   pending = 'pending',
   accepted = 'accepted',
   arrivedAtStore = 'arrivedAtStore',
   inTransit = 'inTransit',
+  arrivedAtDestination = 'arrivedAtDestination',
   inProgress = 'inProgress',
   completed = 'completed',
   cancelled = 'cancelled',
@@ -171,6 +173,13 @@ export interface CreateDeliveryOrderDto {
   notes?: string;
   value: number;
   deliveryFee: number;
+  priority?: DeliveryPriority;
+}
+
+export interface WhatsAppOrderWebhookDto {
+  rawText: string;
+  storeId?: string;
+  value?: number;
   priority?: DeliveryPriority;
 }
 

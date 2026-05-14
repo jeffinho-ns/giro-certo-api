@@ -1,18 +1,20 @@
 import { query, queryOne, transaction } from '../lib/db';
 import type { Application } from 'express';
-import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria, DeliveryStatus, DeliveryOrder, User, Partner, Wallet, TransactionType, TransactionStatus, VehicleType, MaintenanceStatus } from '../types';
+import { CreateDeliveryOrderDto, UpdateDeliveryStatusDto, MatchingCriteria, DeliveryStatus, DeliveryOrder, User, Partner, Wallet, TransactionType, TransactionStatus, VehicleType, MaintenanceStatus, UserRole } from '../types';
 import { calculateDistance } from '../utils/haversine';
 import { generateId } from '../utils/id';
 import { AlertService, AlertSeverity, AlertType } from './alert.service';
-import { UserRole } from '../types';
 import { sendPushToUser } from './fcm.service';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { incrementOpsMetric, observeOpsMetric } from '../utils/ops-metrics';
 import { ioEmitToRoom } from '../utils/socket-events';
+import { GooglePlacesService } from './google-places.service';
+import { WhatsAppParser } from '../utils/whatsapp-parser';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
   private readonly deliveryPricingService = new DeliveryPricingService();
+  private readonly googlePlacesService = new GooglePlacesService();
   /**
    * Criar um novo pedido de delivery
    * Calcula automaticamente a comissão baseada no tipo de assinatura
@@ -43,7 +45,7 @@ export class DeliveryService {
     }
 
     const orderId = generateId();
-    const status = DeliveryStatus.pending;
+    const status = DeliveryStatus.awaiting_dispatch;
     const priority = data.priority || 'normal';
 
     // Criar pedido
@@ -94,14 +96,122 @@ export class DeliveryService {
 
     if (order) {
       await incrementOpsMetric('orders_created_total');
-      // Push para riders elegíveis: funciona com app em background/tela bloqueada.
-      // Não bloqueia criação do pedido se o Firebase/FCM falhar.
-      void this.notifyMatchingRidersAboutNewOrder(order).catch((err) => {
-        console.warn('[DeliveryService] push new order falhou:', err);
-      });
     }
 
     return order;
+  }
+
+  async createOrderFromWhatsAppText(
+    rawText: string,
+    storeId: string,
+    options?: { value?: number; priority?: CreateDeliveryOrderDto['priority'] }
+  ) {
+    const parsed = WhatsAppParser.parse(rawText);
+    if (!parsed.confirmed) {
+      return {
+        created: false as const,
+        reason: 'confirmation_not_yes' as const,
+        parsed,
+      };
+    }
+
+    const geocoded = await this.geocodeDeliveryAddress(parsed.fullAddress);
+    const partner = await queryOne<Partner>(
+      'SELECT * FROM "Partner" WHERE id = $1',
+      [storeId]
+    );
+    if (!partner) {
+      throw new Error('Parceiro nao encontrado');
+    }
+
+    const order = await this.createOrder({
+      storeId: partner.id,
+      storeName: partner.name,
+      storeAddress: partner.address,
+      storeLatitude: partner.latitude,
+      storeLongitude: partner.longitude,
+      deliveryAddress: geocoded.formattedAddress,
+      deliveryLatitude: geocoded.latitude,
+      deliveryLongitude: geocoded.longitude,
+      recipientName: parsed.recipientName,
+      recipientPhone: parsed.recipientPhone,
+      notes: 'Pedido injetado via WhatsApp (MVP Mágico de Oz).',
+      value: Number.isFinite(options?.value) ? Number(options?.value) : 0,
+      deliveryFee: 0,
+      priority: options?.priority,
+    });
+
+    if (!order) {
+      throw new Error('Falha ao criar pedido a partir do WhatsApp.');
+    }
+
+    return {
+      created: true as const,
+      order,
+      deliveryPin: WhatsAppParser.deriveDeliveryProofPin(parsed.recipientPhone),
+      internalCode: this.getInternalCode(order.id),
+      parsed,
+    };
+  }
+
+  async dispatchOrder(orderId: string): Promise<DeliveryOrder> {
+    const order = await queryOne<DeliveryOrder>(
+      'SELECT * FROM "DeliveryOrder" WHERE id = $1',
+      [orderId]
+    );
+
+    if (!order) {
+      throw new Error('Pedido nao encontrado');
+    }
+
+    if (order.status !== DeliveryStatus.awaiting_dispatch) {
+      throw new Error('Pedido nao esta aguardando despacho');
+    }
+
+    const updatedRows = await query<DeliveryOrder>(
+      `UPDATE "DeliveryOrder"
+       SET status = $1
+       WHERE id = $2
+         AND status = $3
+       RETURNING *`,
+      [DeliveryStatus.pending, orderId, DeliveryStatus.awaiting_dispatch]
+    );
+
+    const updatedOrder = updatedRows[0];
+    if (!updatedOrder) {
+      throw new Error('Pedido nao esta aguardando despacho');
+    }
+
+    await this.announceOrderToRiders(updatedOrder);
+    return updatedOrder;
+  }
+
+  async announceOrderToRiders(order: DeliveryOrder, app?: Application): Promise<void> {
+    if (order.status !== DeliveryStatus.pending) {
+      return;
+    }
+
+    await this.notifyMatchingRidersAboutNewOrder(order);
+    if (app) {
+      await this.emitLiveDeliveryOffers(app, order);
+    }
+  }
+
+  private async geocodeDeliveryAddress(address: string) {
+    const suggestions = await this.googlePlacesService.autocomplete(address);
+    if (suggestions.length === 0) {
+      throw new Error('Nao foi possivel geocodificar o endereco informado.');
+    }
+
+    const details = await this.googlePlacesService.placeDetails(
+      suggestions[0].placeId
+    );
+
+    return {
+      latitude: details.latitude,
+      longitude: details.longitude,
+      formattedAddress: details.formattedAddress || address,
+    };
   }
 
   /**
@@ -510,6 +620,7 @@ export class DeliveryService {
     }
 
     const allowedTransitions: Record<string, DeliveryStatus[]> = {
+      [DeliveryStatus.awaiting_dispatch]: [DeliveryStatus.cancelled],
       [DeliveryStatus.pending]: [DeliveryStatus.accepted, DeliveryStatus.cancelled],
       [DeliveryStatus.accepted]: [
         DeliveryStatus.arrivedAtStore,
@@ -519,8 +630,18 @@ export class DeliveryService {
         DeliveryStatus.inTransit,
         DeliveryStatus.cancelled,
       ],
-      [DeliveryStatus.inTransit]: [DeliveryStatus.completed, DeliveryStatus.cancelled],
-      [DeliveryStatus.inProgress]: [DeliveryStatus.completed, DeliveryStatus.cancelled],
+      [DeliveryStatus.inTransit]: [
+        DeliveryStatus.arrivedAtDestination,
+        DeliveryStatus.cancelled,
+      ],
+      [DeliveryStatus.inProgress]: [
+        DeliveryStatus.arrivedAtDestination,
+        DeliveryStatus.cancelled,
+      ],
+      [DeliveryStatus.arrivedAtDestination]: [
+        DeliveryStatus.completed,
+        DeliveryStatus.cancelled,
+      ],
       [DeliveryStatus.completed]: [],
       [DeliveryStatus.cancelled]: [],
     };
@@ -534,7 +655,12 @@ export class DeliveryService {
 
     // Segurança: após aceite, somente o rider que aceitou pode avançar o fluxo logístico.
     if (
-      [DeliveryStatus.arrivedAtStore, DeliveryStatus.inTransit, DeliveryStatus.completed].includes(nextStatus) &&
+      [
+        DeliveryStatus.arrivedAtStore,
+        DeliveryStatus.inTransit,
+        DeliveryStatus.arrivedAtDestination,
+        DeliveryStatus.completed,
+      ].includes(nextStatus) &&
       (!actorUserId || actorUserId !== order.riderId)
     ) {
       throw new Error('Apenas o motociclista responsável pode atualizar este status');
@@ -543,20 +669,24 @@ export class DeliveryService {
     if (nextStatus === DeliveryStatus.inTransit) {
       const expected = this.getInternalCode(order.id);
       const received = (data.pickupCode || '').trim().toUpperCase();
-      if (!received || received !== expected) {
+      if (!received) {
+        throw new Error('Informe o codigo de retirada da loja.');
+      }
+      if (received !== expected) {
         await incrementOpsMetric('pickup_code_validation_failed_total');
-        throw new Error('Código interno inválido para retirada. Confirme o código com a loja.');
+        throw new Error('Codigo da loja incorreto');
       }
     }
 
     if (nextStatus === DeliveryStatus.completed) {
       const expected = this.getExpectedDeliveryProofPin(order);
       const received = (data.deliveryPin || '').replace(/\D/g, '');
-      if (received.length !== 4 || received !== expected) {
+      if (received.length !== 4) {
+        throw new Error('Informe o PIN de 4 digitos do cliente.');
+      }
+      if (received !== expected) {
         await incrementOpsMetric('delivery_proof_pin_failed_total');
-        throw new Error(
-          'PIN de entrega invalido. Confirme os ultimos 4 digitos do telefone do cliente.'
-        );
+        throw new Error('PIN do cliente incorreto');
       }
     }
 
@@ -569,6 +699,10 @@ export class DeliveryService {
 
     if (nextStatus === DeliveryStatus.inTransit) {
       updateQuery += ', "in_transit_at" = NOW()';
+    }
+
+    if (nextStatus === DeliveryStatus.arrivedAtDestination) {
+      updateQuery += ', "arrived_at_destination_at" = NOW()';
     }
 
     if (nextStatus === DeliveryStatus.inProgress) {
@@ -638,9 +772,11 @@ export class DeliveryService {
     if (recipients.size === 0) return;
 
     const statusLabel: Record<string, string> = {
+      awaiting_dispatch: 'pedido aguardando despacho',
       accepted: 'corrida aceita',
       arrivedAtStore: 'entregador chegou na loja',
       inTransit: 'entrega em trânsito',
+      arrivedAtDestination: 'entregador chegou ao cliente',
       inProgress: 'entrega em andamento',
       completed: 'entrega concluída',
       cancelled: 'entrega cancelada',
@@ -692,6 +828,10 @@ export class DeliveryService {
     app: Application,
     order: DeliveryOrder
   ): Promise<void> {
+    if (order.status !== DeliveryStatus.pending) {
+      return;
+    }
+
     const matching = await this.findMatchingRiders({
       latitude: order.storeLatitude,
       longitude: order.storeLongitude,
@@ -741,6 +881,10 @@ export class DeliveryService {
   private async notifyMatchingRidersAboutNewOrder(
     order: DeliveryOrder
   ): Promise<void> {
+    if (order.status !== DeliveryStatus.pending) {
+      return;
+    }
+
     const matching = await this.findMatchingRiders({
       latitude: order.storeLatitude,
       longitude: order.storeLongitude,

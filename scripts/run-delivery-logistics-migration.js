@@ -32,6 +32,8 @@ async function run() {
     console.log('🔄 Executando migração de fluxo logístico granular...\n');
     await runMigrationFile(client, 'migrate-delivery-status-granular.sql');
     await runMigrationFile(client, 'migrate-alert-type-delivery-arrived.sql');
+    await runMigrationFile(client, 'migrate-delivery-awaiting-dispatch.sql');
+    await runMigrationFile(client, 'migrate-delivery-arrived-at-destination.sql');
     console.log('\n🎉 Migrações de logística concluídas com sucesso.');
   } catch (error) {
     console.error('\n❌ Falha na migração:', error.message);

@@ -4,6 +4,8 @@ import {
   CreateDeliveryOrderDto,
   UpdateDeliveryStatusDto,
   MatchingCriteria,
+  WhatsAppOrderWebhookDto,
+  UserRole,
 } from '../types';
 import { AuthRequest } from '../middleware/auth';
 import { getIo, ioEmit, ioEmitToRoom } from '../utils/socket-events';
@@ -13,6 +15,43 @@ const deliveryService = new DeliveryService();
 const deliveryPricingService = new DeliveryPricingService();
 
 export class DeliveryController {
+  private resolveStoreId(req: AuthRequest, bodyStoreId?: string): string {
+    const user = req.user;
+    if (!user) {
+      throw new Error('Usuario nao autenticado');
+    }
+
+    if (user.role === UserRole.ADMIN) {
+      if (!bodyStoreId) {
+        throw new Error('storeId obrigatorio para administradores');
+      }
+      return bodyStoreId;
+    }
+
+    if (!user.partnerId) {
+      throw new Error('Usuario sem loja associada');
+    }
+
+    if (bodyStoreId && bodyStoreId !== user.partnerId) {
+      throw new Error('Sem permissao para operar outra loja');
+    }
+
+    return user.partnerId;
+  }
+
+  private async assertCanManageOrder(req: AuthRequest, storeId: string): Promise<void> {
+    const user = req.user;
+    if (!user) {
+      throw new Error('Usuario nao autenticado');
+    }
+    if (user.role === UserRole.ADMIN) {
+      return;
+    }
+    if (user.partnerId !== storeId) {
+      throw new Error('Sem permissao para operar este pedido');
+    }
+  }
+
   private withInternalCode<T extends { id?: string }>(order: T): T & { internalCode: string | null } {
     const rawId = typeof order?.id === 'string' ? order.id : '';
     const compact = rawId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
@@ -70,14 +109,79 @@ export class DeliveryController {
       const order = await deliveryService.createOrder(data);
       const { partner: _p, ...orderPlain } = order as any;
       const payload = this.withInternalCode(orderPlain);
-      void deliveryService
-        .emitLiveDeliveryOffers(req.app, order as any)
-        .catch((err) => {
-          console.warn('[DeliveryController] socket offer falhou:', err);
-        });
       ioEmit(req.app, 'delivery:update', { order: payload });
       ioEmitToRoom(req.app, `order:${orderPlain.id}`, 'delivery:update', { order: payload });
       res.status(201).json(payload);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  async createWhatsAppOrder(req: AuthRequest, res: Response) {
+    try {
+      const data = req.body as WhatsAppOrderWebhookDto;
+      if (!data?.rawText || typeof data.rawText !== 'string') {
+        return res.status(400).json({ error: 'rawText obrigatorio' });
+      }
+
+      const storeId = this.resolveStoreId(req, data.storeId);
+      const result = await deliveryService.createOrderFromWhatsAppText(
+        data.rawText,
+        storeId,
+        {
+          value: data.value,
+          priority: data.priority,
+        }
+      );
+
+      if (!result.created) {
+        return res.status(200).json({
+          created: false,
+          reason: result.reason,
+          message:
+            'Pedido nao criado porque a confirmacao nao foi Sim. Revise o texto e reenvie.',
+          parsed: result.parsed,
+        });
+      }
+
+      const { partner: _p, ...orderPlain } = result.order as any;
+      const payload = this.withInternalCode(orderPlain);
+      ioEmit(req.app, 'delivery:update', { order: payload });
+      ioEmitToRoom(req.app, `order:${orderPlain.id}`, 'delivery:update', { order: payload });
+
+      res.status(201).json({
+        created: true,
+        orderId: result.order.id,
+        internalCode: result.internalCode,
+        deliveryPin: result.deliveryPin,
+        status: result.order.status,
+        order: payload,
+        parsed: result.parsed,
+      });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  async dispatchOrder(req: AuthRequest, res: Response) {
+    try {
+      const orderId = Array.isArray(req.params.orderId)
+        ? req.params.orderId[0]
+        : req.params.orderId;
+      const existing = await deliveryService.getOrderById(orderId);
+      await this.assertCanManageOrder(req, existing.storeId);
+
+      const order = await deliveryService.dispatchOrder(orderId);
+      await deliveryService.announceOrderToRiders(order, req.app);
+
+      const payload = this.withInternalCode(order as any);
+      ioEmit(req.app, 'delivery:update', { order: payload });
+      ioEmitToRoom(req.app, `order:${order.id}`, 'delivery:update', { order: payload });
+
+      res.json({
+        dispatched: true,
+        order: payload,
+      });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -235,7 +339,7 @@ export class DeliveryController {
         ? req.params.orderId[0]
         : req.params.orderId;
       const order = await deliveryService.getOrderById(orderId);
-      res.json(this.withInternalCode(order as any));
+      res.json(this.riderFacingOrder(order as any));
     } catch (error: any) {
       res.status(404).json({ error: error.message });
     }
