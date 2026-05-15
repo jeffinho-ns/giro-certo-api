@@ -115,6 +115,27 @@ export class DeliveryService {
       };
     }
 
+    const fromText =
+      Number.isFinite(parsed.itemValue) && parsed.itemValue >= 0
+        ? parsed.itemValue
+        : Number.NaN;
+    const fromBody =
+      options?.value != null &&
+      Number.isFinite(Number(options.value)) &&
+      Number(options.value) >= 0
+        ? Number(options.value)
+        : Number.NaN;
+    const resolvedItemValue = Number.isFinite(fromText)
+      ? fromText
+      : Number.isFinite(fromBody)
+        ? fromBody
+        : Number.NaN;
+    if (!Number.isFinite(resolvedItemValue) || resolvedItemValue < 0) {
+      throw new Error(
+        'Valor do item obrigatorio. Inclua no texto a linha "Valor do item: 12,50" (ou envie o campo JSON "value").'
+      );
+    }
+
     const geocoded = await this.geocodeDeliveryAddress(parsed.fullAddress);
     const partner = await queryOne<Partner>(
       'SELECT * FROM "Partner" WHERE id = $1',
@@ -124,6 +145,7 @@ export class DeliveryService {
       throw new Error('Parceiro nao encontrado');
     }
 
+    const valueNote = `Valor do item informado: R$ ${resolvedItemValue.toFixed(2).replace('.', ',')}.`;
     const order = await this.createOrder({
       storeId: partner.id,
       storeName: partner.name,
@@ -135,8 +157,8 @@ export class DeliveryService {
       deliveryLongitude: geocoded.longitude,
       recipientName: parsed.recipientName,
       recipientPhone: parsed.recipientPhone,
-      notes: 'Pedido injetado via WhatsApp (MVP Mágico de Oz).',
-      value: Number.isFinite(options?.value) ? Number(options?.value) : 0,
+      notes: `Pedido via WhatsApp. ${valueNote}`,
+      value: resolvedItemValue,
       deliveryFee: 0,
       priority: options?.priority,
     });

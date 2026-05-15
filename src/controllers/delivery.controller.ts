@@ -112,6 +112,20 @@ export class DeliveryController {
     }
   }
 
+  /** Ping leve para a app lojista recarregar a lista (ex.: pedido WhatsApp / novo pedido). */
+  private emitStoreFrontOfficeRefresh(
+    app: Application,
+    order: { id?: string; storeId?: string }
+  ) {
+    const sid = order?.storeId != null ? String(order.storeId) : '';
+    if (!sid) return;
+    const oid = order?.id != null ? String(order.id) : '';
+    ioEmitToRoom(app, `store:${sid}`, 'delivery:store_refresh', {
+      storeId: sid,
+      orderId: oid,
+    });
+  }
+
   async quote(req: AuthRequest, res: Response) {
     try {
       const {
@@ -142,6 +156,7 @@ export class DeliveryController {
       const order = await deliveryService.createOrder(data);
       const { partner: _p, ...orderPlain } = order as any;
       await this.broadcastOrderLifecycleUpdate(req.app, orderPlain);
+      this.emitStoreFrontOfficeRefresh(req.app, orderPlain);
       res.status(201).json(this.withInternalCode(orderPlain));
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -195,6 +210,7 @@ export class DeliveryController {
       const { partner: _p, ...orderPlain } = orderAfterDispatch as any;
       const payload = this.withInternalCode(orderPlain);
       await this.broadcastOrderLifecycleUpdate(req.app, orderPlain);
+      this.emitStoreFrontOfficeRefresh(req.app, orderPlain);
 
       res.status(201).json({
         created: true,
@@ -232,6 +248,7 @@ export class DeliveryController {
 
       const payload = this.withInternalCode(order as any);
       await this.broadcastOrderLifecycleUpdate(req.app, order as any);
+      this.emitStoreFrontOfficeRefresh(req.app, order as any);
 
       res.json({
         dispatched: true,
