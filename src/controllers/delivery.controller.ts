@@ -57,11 +57,9 @@ export class DeliveryController {
 
   private withInternalCode<T extends { id?: string }>(order: T): T & { internalCode: string | null } {
     const rawId = typeof order?.id === 'string' ? order.id : '';
-    const compact = rawId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-    const tail = compact.slice(-8);
     return {
       ...order,
-      internalCode: tail ? `GC-${tail}` : null,
+      internalCode: rawId ? deliveryService.getStorePickupCode(rawId) : null,
     };
   }
 
@@ -82,14 +80,25 @@ export class DeliveryController {
     return orders.map((order) => this.riderFacingOrder(order));
   }
 
-  private broadcastOrderLifecycleUpdate(
+  private async broadcastOrderLifecycleUpdate(
     app: Application,
-    order: { id?: string; storeId?: string }
+    order: { id?: string; storeId?: string },
+    options?: { skipSnapshot?: boolean }
   ) {
-    const payload = this.withInternalCode(order as any);
+    let payloadOrder: any = order;
+    const oid = typeof order?.id === 'string' ? order.id : '';
+    if (oid && !options?.skipSnapshot) {
+      try {
+        const enriched = await deliveryService.getOrderBroadcastSnapshot(oid);
+        if (enriched) payloadOrder = enriched;
+      } catch {
+        // mantém pedido original
+      }
+    }
+    const payload = this.withInternalCode(payloadOrder);
     const envelope = { order: payload };
-    const orderId = typeof order.id === 'string' ? order.id : '';
-    const storeId = typeof order.storeId === 'string' ? order.storeId : '';
+    const orderId = typeof payload.id === 'string' ? payload.id : '';
+    const storeId = typeof payload.storeId === 'string' ? payload.storeId : '';
 
     ioEmit(app, 'delivery:update', envelope);
     ioEmit(app, 'delivery:status:changed', envelope);
@@ -132,7 +141,7 @@ export class DeliveryController {
       const data: CreateDeliveryOrderDto = req.body;
       const order = await deliveryService.createOrder(data);
       const { partner: _p, ...orderPlain } = order as any;
-      this.broadcastOrderLifecycleUpdate(req.app, orderPlain);
+      await this.broadcastOrderLifecycleUpdate(req.app, orderPlain);
       res.status(201).json(this.withInternalCode(orderPlain));
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -185,7 +194,7 @@ export class DeliveryController {
 
       const { partner: _p, ...orderPlain } = orderAfterDispatch as any;
       const payload = this.withInternalCode(orderPlain);
-      this.broadcastOrderLifecycleUpdate(req.app, orderPlain);
+      await this.broadcastOrderLifecycleUpdate(req.app, orderPlain);
 
       res.status(201).json({
         created: true,
@@ -222,7 +231,7 @@ export class DeliveryController {
       }
 
       const payload = this.withInternalCode(order as any);
-      this.broadcastOrderLifecycleUpdate(req.app, order as any);
+      await this.broadcastOrderLifecycleUpdate(req.app, order as any);
 
       res.json({
         dispatched: true,
@@ -317,7 +326,7 @@ export class DeliveryController {
         riderName,
         idempotencyKey
       );
-      this.broadcastOrderLifecycleUpdate(req.app, order as any);
+      await this.broadcastOrderLifecycleUpdate(req.app, order as any);
       res.json(this.riderFacingOrder(order as any));
     } catch (error: any) {
       if (error?.code === 'ORDER_ALREADY_ACCEPTED') {
@@ -361,8 +370,10 @@ export class DeliveryController {
       data.riderId = req.userId;
       data.idempotencyKey = req.header('x-idempotency-key') || undefined;
 
-      const order = await deliveryService.updateOrderStatus(orderId, data);
-      this.broadcastOrderLifecycleUpdate(req.app, order as any);
+      const order = await deliveryService.updateOrderStatus(orderId, data, req.app);
+      await this.broadcastOrderLifecycleUpdate(req.app, order as any, {
+        skipSnapshot: true,
+      });
       res.json(this.riderFacingOrder(order as any));
     } catch (error: any) {
       res.status(400).json({ error: error.message });

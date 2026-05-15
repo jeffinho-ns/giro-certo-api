@@ -149,7 +149,7 @@ export class DeliveryService {
       created: true as const,
       order,
       deliveryPin: WhatsAppParser.deriveDeliveryProofPin(parsed.recipientPhone),
-      internalCode: this.getInternalCode(order.id),
+      internalCode: this.getStorePickupCode(order.id),
       parsed,
     };
   }
@@ -632,7 +632,11 @@ export class DeliveryService {
   /**
    * Atualizar status do pedido
    */
-  async updateOrderStatus(orderId: string, data: UpdateDeliveryStatusDto) {
+  async updateOrderStatus(
+    orderId: string,
+    data: UpdateDeliveryStatusDto,
+    app?: Application
+  ) {
     const order = await queryOne<DeliveryOrder>(
       'SELECT * FROM "DeliveryOrder" WHERE id = $1',
       [orderId]
@@ -701,12 +705,14 @@ export class DeliveryService {
     }
 
     if (nextStatus === DeliveryStatus.inTransit) {
-      const expected = this.getInternalCode(order.id);
-      const received = (data.pickupCode || '').trim().toUpperCase();
+      const short = this.getStorePickupCode(order.id);
+      const legacy = this.getLegacyStorePickupCode(order.id);
+      const received = (data.pickupCode || '').trim().toUpperCase().replace(/\s+/g, '');
       if (!received) {
         throw new Error('Informe o codigo de retirada da loja.');
       }
-      if (received !== expected) {
+      const ok = received === short || (legacy.length > 0 && received === legacy);
+      if (!ok) {
         await incrementOpsMetric('pickup_code_validation_failed_total');
         throw new Error('Codigo da loja incorreto');
       }
@@ -768,13 +774,39 @@ export class DeliveryService {
 
     await query(updateQuery, params);
 
-    const updatedOrder = await queryOne<DeliveryOrder>(
-      'SELECT * FROM "DeliveryOrder" WHERE id = $1',
-      [orderId]
-    );
+    const updatedOrder =
+      (await this.getOrderBroadcastSnapshot(orderId)) ||
+      (await queryOne<DeliveryOrder>(
+        'SELECT * FROM "DeliveryOrder" WHERE id = $1',
+        [orderId]
+      ));
 
     if (nextStatus === DeliveryStatus.arrivedAtStore && updatedOrder) {
       await this.notifyAdminsRiderArrivedAtStore(updatedOrder);
+      const row = updatedOrder as DeliveryOrder & {
+        riderPhotoUrl?: string | null;
+        riderBikePlate?: string | null;
+        riderBikeModel?: string | null;
+        riderBikeVehicleType?: string | null;
+      };
+      if (app && updatedOrder.storeId) {
+        const riderName = updatedOrder.riderName ?? 'Motociclista';
+        const bikeLine =
+          [row.riderBikeModel, row.riderBikePlate].filter(Boolean).join(' · ') ||
+          'Veículo não cadastrado';
+        ioEmitToRoom(app, `store:${updatedOrder.storeId}`, 'notification', {
+          title: `${riderName} chegou na sua loja`,
+          body: `${bikeLine}. Código de retirada: ${this.getStorePickupCode(orderId)}`,
+          type: 'rider_arrived_store',
+          orderId: updatedOrder.id,
+          riderId: updatedOrder.riderId ?? '',
+          riderName,
+          riderPhotoUrl: row.riderPhotoUrl ?? '',
+          riderBikePlate: row.riderBikePlate ?? '',
+          riderBikeModel: row.riderBikeModel ?? '',
+          riderBikeVehicleType: row.riderBikeVehicleType ?? '',
+        });
+      }
     }
     if (updatedOrder) {
       await this.notifyOrderStatusPush(updatedOrder);
@@ -801,9 +833,41 @@ export class DeliveryService {
       `SELECT id FROM "User" WHERE "partnerId" = $1`,
       [order.storeId]
     );
-    const recipients = new Set<string>(storeUsers.map((u) => u.id));
-    if (order.riderId) recipients.add(order.riderId);
-    if (recipients.size === 0) return;
+    const storeUserIds = storeUsers.map((u) => u.id);
+    if (storeUserIds.length === 0 && !order.riderId) return;
+
+    const row = order as DeliveryOrder & {
+      riderPhotoUrl?: string | null;
+      riderBikePlate?: string | null;
+      riderBikeModel?: string | null;
+      riderBikeVehicleType?: string | null;
+    };
+
+    if (order.status === DeliveryStatus.arrivedAtStore) {
+      const riderName = order.riderName ?? 'Motociclista';
+      const bikeLine =
+        [row.riderBikeModel, row.riderBikePlate].filter(Boolean).join(' · ') ||
+        'Dados do veículo não cadastrados no app.';
+      const code = this.getStorePickupCode(order.id);
+      const title = `${riderName} chegou na sua loja`;
+      const body = `${bikeLine}\nCódigo de retirada (4 dígitos): ${code}`;
+      const dataBase: Record<string, string> = {
+        type: 'rider_arrived_store',
+        orderId: order.id,
+        status: String(order.status),
+        riderId: order.riderId ?? '',
+        riderName,
+        riderPhotoUrl: row.riderPhotoUrl ?? '',
+        riderBikePlate: row.riderBikePlate ?? '',
+        riderBikeModel: row.riderBikeModel ?? '',
+        riderBikeVehicleType: row.riderBikeVehicleType ?? '',
+        pickupCode: code,
+      };
+      for (const userId of storeUserIds) {
+        await sendPushToUser(userId, title, body, dataBase);
+      }
+      return;
+    }
 
     const statusLabel: Record<string, string> = {
       awaiting_dispatch: 'pedido aguardando despacho',
@@ -817,6 +881,8 @@ export class DeliveryService {
       pending: 'pedido pendente',
     };
     const label = statusLabel[order.status] ?? order.status;
+    const recipients = new Set<string>(storeUserIds);
+    if (order.riderId) recipients.add(order.riderId);
     for (const userId of recipients) {
       await sendPushToUser(
         userId,
@@ -1120,10 +1186,22 @@ export class DeliveryService {
           WHERE dr."userId" = ord."riderId"
           ORDER BY dr."createdAt" DESC
           LIMIT 1
-        ) as "riderPhone"
+        ) as "riderPhone",
+        bk.plate as "riderBikePlate",
+        NULLIF(trim(concat_ws(' ', bk.brand, bk.model)), '') as "riderBikeModel",
+        bk."vehicleType"::text as "riderBikeVehicleType"
        FROM "DeliveryOrder" ord
        LEFT JOIN "Partner" p ON p.id = ord."storeId"
        LEFT JOIN "User" u ON u.id = ord."riderId"
+       LEFT JOIN LATERAL (
+        SELECT b.plate, b.brand, b.model, b."vehicleType"
+        FROM "Bike" b
+        WHERE b."userId" = ord."riderId"
+        ORDER BY
+          CASE WHEN b."vehicleType" = 'MOTORCYCLE' THEN 0 ELSE 1 END,
+          b."updatedAt" DESC NULLS LAST
+        LIMIT 1
+      ) bk ON true
        ${whereClause}
        ORDER BY ord."createdAt" DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -1258,9 +1336,66 @@ export class DeliveryService {
     return String(status ?? '').trim();
   }
 
-  private getInternalCode(orderId: string): string {
+  /**
+   * Pedido com dados do motociclista e da moto (para broadcast / push ao lojista).
+   */
+  async getOrderBroadcastSnapshot(orderId: string) {
+    return queryOne<
+      DeliveryOrder & {
+        riderEmail?: string | null;
+        riderPhotoUrl?: string | null;
+        riderPhone?: string | null;
+        riderBikePlate?: string | null;
+        riderBikeModel?: string | null;
+        riderBikeVehicleType?: string | null;
+      }
+    >(
+      `SELECT 
+        ord.*,
+        u.email AS "riderEmail",
+        u."photoUrl" AS "riderPhotoUrl",
+        (
+          SELECT dr."emergencyPhone"
+          FROM "DeliveryRegistration" dr
+          WHERE dr."userId" = ord."riderId"
+          ORDER BY dr."createdAt" DESC
+          LIMIT 1
+        ) AS "riderPhone",
+        bk.plate AS "riderBikePlate",
+        NULLIF(trim(concat_ws(' ', bk.brand, bk.model)), '') AS "riderBikeModel",
+        bk."vehicleType"::text AS "riderBikeVehicleType"
+      FROM "DeliveryOrder" ord
+      LEFT JOIN "User" u ON u.id = ord."riderId"
+      LEFT JOIN LATERAL (
+        SELECT b.plate, b.brand, b.model, b."vehicleType"
+        FROM "Bike" b
+        WHERE b."userId" = ord."riderId"
+        ORDER BY
+          CASE WHEN b."vehicleType" = 'MOTORCYCLE' THEN 0 ELSE 1 END,
+          b."updatedAt" DESC NULLS LAST
+        LIMIT 1
+      ) bk ON true
+      WHERE ord.id = $1`,
+      [orderId]
+    );
+  }
+
+  /** Código curto (4 dígitos) para o lojista informar na retirada. */
+  getStorePickupCode(orderId: string): string {
+    let h = 0;
+    const s = orderId || '';
+    for (let i = 0; i < s.length; i++) {
+      h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+    }
+    const n = (Math.abs(h) % 10000).toString().padStart(4, '0');
+    return n;
+  }
+
+  /** Formato antigo GC-xxxxxxxx (ainda aceito na validação). */
+  private getLegacyStorePickupCode(orderId: string): string {
     const compact = (orderId || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-    return `GC-${compact.slice(-8)}`;
+    const tail = compact.slice(-8);
+    return tail ? `GC-${tail}` : '';
   }
 
   private getExpectedDeliveryProofPin(order: DeliveryOrder): string {
