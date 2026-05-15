@@ -7,7 +7,7 @@ import { AlertService, AlertSeverity, AlertType } from './alert.service';
 import { sendPushToUser } from './fcm.service';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { incrementOpsMetric, observeOpsMetric } from '../utils/ops-metrics';
-import { ioEmitToRoom } from '../utils/socket-events';
+import { ioEmit, ioEmitToRoom } from '../utils/socket-events';
 import { GooglePlacesService } from './google-places.service';
 import { WhatsAppParser } from '../utils/whatsapp-parser';
 
@@ -214,6 +214,32 @@ export class DeliveryService {
       longitude: details.longitude,
       formattedAddress: details.formattedAddress || address,
     };
+  }
+
+  /**
+   * MVP: motociclistas (cadastro delivery ou perfil TRABALHO), sem loja, sem bloqueio e sem corrida ativa.
+   * Nao exige GPS nem proximidade.
+   */
+  private async listRiderUserIdsEligibleForOfferBroadcast(limit = 500): Promise<string[]> {
+    const rows = await query<{ id: string }>(
+      `SELECT u.id
+       FROM "User" u
+       WHERE u."partnerId" IS NULL
+         AND COALESCE(u."deliveryRiderBlocked", false) = false
+         AND (
+           EXISTS (SELECT 1 FROM "DeliveryRegistration" dr WHERE dr."userId" = u.id)
+           OR u."pilotProfile" = 'TRABALHO'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM "DeliveryOrder" d
+           WHERE d."riderId" = u.id
+             AND d.status IN ('accepted','arrivedAtStore','inTransit','inProgress')
+         )
+       ORDER BY u."updatedAt" DESC NULLS LAST
+       LIMIT $1`,
+      [limit]
+    );
+    return rows.map((r) => r.id);
   }
 
   /**
@@ -840,40 +866,36 @@ export class DeliveryService {
       return;
     }
 
-    const matching = await this.findMatchingRiders({
-      latitude: order.storeLatitude,
-      longitude: order.storeLongitude,
-      radius: 7,
-      storeLatitude: order.storeLatitude,
-      storeLongitude: order.storeLongitude,
-      deliveryLatitude: order.deliveryLatitude,
-      deliveryLongitude: order.deliveryLongitude,
-    });
-
-    const available = matching.filter((r) => (r.activeOrders || 0) === 0);
-    if (available.length === 0) return;
-
     const offerOrder = this.buildDeliveryOfferOrder(order);
+    const routeDistanceKm =
+      order.storeLatitude != null &&
+      order.storeLongitude != null &&
+      order.deliveryLatitude != null &&
+      order.deliveryLongitude != null
+        ? parseFloat(
+            calculateDistance(
+              order.storeLatitude,
+              order.storeLongitude,
+              order.deliveryLatitude,
+              order.deliveryLongitude
+            ).toFixed(2)
+          )
+        : null;
 
-    for (const rider of available.slice(0, 40)) {
-      ioEmitToRoom(app, `user:${rider.id}`, 'delivery:new_order_offer', {
-        order: offerOrder,
-        distanceToStoreKm: rider.distance,
-        routeDistanceKm: rider.deliveryDistance,
-        expiresInSeconds: 15,
-      });
-    }
+    // MVP: broadcast global — todos os clientes ligados recebem (o app do motociclista trata no overlay).
+    // Push FCM fica em notifyMatchingRidersAboutNewOrder para nao duplicar quando announceOrderToRiders chama ambos.
+    ioEmit(app, 'delivery:new_order_offer', {
+      order: offerOrder,
+      distanceToStoreKm: null,
+      routeDistanceKm,
+      expiresInSeconds: 25,
+    });
   }
 
   async replayPendingOffersForRider(
     app: Application,
     riderId: string
   ): Promise<void> {
-    const rider = await queryOne<User>('SELECT * FROM "User" WHERE id = $1', [riderId]);
-    if (!rider?.currentLat || !rider?.currentLng) {
-      return;
-    }
-
     const activeOrder = await queryOne<{ id: string }>(
       `SELECT id FROM "DeliveryOrder"
        WHERE "riderId" = $1
@@ -895,25 +917,26 @@ export class DeliveryService {
     );
 
     for (const order of orders) {
-      const matching = await this.findMatchingRiders({
-        latitude: order.storeLatitude,
-        longitude: order.storeLongitude,
-        radius: 7,
-        storeLatitude: order.storeLatitude,
-        storeLongitude: order.storeLongitude,
-        deliveryLatitude: order.deliveryLatitude,
-        deliveryLongitude: order.deliveryLongitude,
-      });
-      const entry = matching.find((candidate) => candidate.id === riderId);
-      if (!entry || (entry.activeOrders || 0) > 0) {
-        continue;
-      }
+      const routeDistanceKm =
+        order.storeLatitude != null &&
+        order.storeLongitude != null &&
+        order.deliveryLatitude != null &&
+        order.deliveryLongitude != null
+          ? parseFloat(
+              calculateDistance(
+                order.storeLatitude,
+                order.storeLongitude,
+                order.deliveryLatitude,
+                order.deliveryLongitude
+              ).toFixed(2)
+            )
+          : null;
 
       ioEmitToRoom(app, `user:${riderId}`, 'delivery:new_order_offer', {
         order: this.buildDeliveryOfferOrder(order),
-        distanceToStoreKm: entry.distance,
-        routeDistanceKm: entry.deliveryDistance,
-        expiresInSeconds: 15,
+        distanceToStoreKm: null,
+        routeDistanceKm,
+        expiresInSeconds: 25,
       });
       return;
     }
@@ -951,28 +974,33 @@ export class DeliveryService {
       return;
     }
 
-    const matching = await this.findMatchingRiders({
-      latitude: order.storeLatitude,
-      longitude: order.storeLongitude,
-      radius: 7,
-      storeLatitude: order.storeLatitude,
-      storeLongitude: order.storeLongitude,
-      deliveryLatitude: order.deliveryLatitude,
-      deliveryLongitude: order.deliveryLongitude,
-    });
+    const riderIds = await this.listRiderUserIdsEligibleForOfferBroadcast(500);
+    if (riderIds.length === 0) return;
 
-    const available = matching.filter((r) => (r.activeOrders || 0) === 0);
-    if (available.length === 0) return;
+    const routeDistanceKm =
+      order.storeLatitude != null &&
+      order.storeLongitude != null &&
+      order.deliveryLatitude != null &&
+      order.deliveryLongitude != null
+        ? parseFloat(
+            calculateDistance(
+              order.storeLatitude,
+              order.storeLongitude,
+              order.deliveryLatitude,
+              order.deliveryLongitude
+            ).toFixed(2)
+          )
+        : null;
 
     const distancePart =
-      typeof available[0]?.deliveryDistance === 'number'
-        ? ` • ${available[0].deliveryDistance.toFixed(1)} km`
+      routeDistanceKm != null
+        ? ` • ${routeDistanceKm.toFixed(1)} km`
         : '';
     const body = `${order.storeName} • taxa R$ ${Number(order.deliveryFee).toFixed(2)}${distancePart}`;
 
     await Promise.all(
-      available.slice(0, 40).map((r) =>
-        sendPushToUser(r.id, 'Nova corrida disponível', body, {
+      riderIds.map((id) =>
+        sendPushToUser(id, 'Nova corrida disponível', body, {
           type: 'delivery_offer',
           orderId: order.id,
           storeId: order.storeId,

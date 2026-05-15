@@ -166,7 +166,24 @@ export class DeliveryController {
         });
       }
 
-      const { partner: _p, ...orderPlain } = result.order as any;
+      // Pedido via WhatsApp ja vem confirmado no texto: despacha logo para os motociclistas
+      // (o fluxo manual pelo app lojista continua usando POST .../dispatch).
+      let orderAfterDispatch = result.order;
+      try {
+        const dispatched = await deliveryService.dispatchOrder(result.order.id);
+        await deliveryService.announceOrderToRiders(dispatched, req.app);
+        orderAfterDispatch = {
+          ...result.order,
+          ...dispatched,
+        } as typeof result.order;
+      } catch (autoErr: any) {
+        console.error('[createWhatsAppOrder] Falha ao despachar ou anunciar pedido', {
+          orderId: result.order.id,
+          message: autoErr?.message,
+        });
+      }
+
+      const { partner: _p, ...orderPlain } = orderAfterDispatch as any;
       const payload = this.withInternalCode(orderPlain);
       this.broadcastOrderLifecycleUpdate(req.app, orderPlain);
 
@@ -175,7 +192,7 @@ export class DeliveryController {
         orderId: result.order.id,
         internalCode: result.internalCode,
         deliveryPin: result.deliveryPin,
-        status: result.order.status,
+        status: orderAfterDispatch.status,
         order: payload,
         parsed: result.parsed,
       });
