@@ -11,9 +11,11 @@ import {
 import { AuthRequest } from '../middleware/auth';
 import { getIo, ioEmit, ioEmitToRoom } from '../utils/socket-events';
 import { DeliveryPricingService } from '../services/delivery-pricing.service';
+import { DeliveryPaymentService } from '../services/delivery-payment.service';
 
 const deliveryService = new DeliveryService();
 const deliveryPricingService = new DeliveryPricingService();
+const deliveryPaymentService = new DeliveryPaymentService();
 
 export class DeliveryController {
   private resolveStoreId(req: AuthRequest, bodyStoreId?: string): string {
@@ -190,10 +192,14 @@ export class DeliveryController {
         });
       }
 
-      // Pedido via WhatsApp ja vem confirmado no texto: despacha logo para os motociclistas
-      // (o fluxo manual pelo app lojista continua usando POST .../dispatch).
+      // Pedido via WhatsApp: em modo pré-pago não despacha até haver cobrança paga
+      // (mantém aguardando despacho — loja pode gerar cobrança no app).
       let orderAfterDispatch = result.order;
       try {
+        await deliveryPaymentService.assertPaidIfPartnerRequiresPrepaid(
+          result.order.id,
+          'dispatch'
+        );
         const dispatched = await deliveryService.dispatchOrder(result.order.id);
         await deliveryService.announceOrderToRiders(dispatched, req.app);
         orderAfterDispatch = {
@@ -201,10 +207,17 @@ export class DeliveryController {
           ...dispatched,
         } as typeof result.order;
       } catch (autoErr: any) {
-        console.error('[createWhatsAppOrder] Falha ao despachar ou anunciar pedido', {
-          orderId: result.order.id,
-          message: autoErr?.message,
-        });
+        if (autoErr?.code === 'PAYMENT_REQUIRED_PREPAID') {
+          console.warn(
+            '[createWhatsAppOrder] Pré-pago: pedido criado sem despacho até pagamento confirmado',
+            { orderId: result.order.id }
+          );
+        } else {
+          console.error('[createWhatsAppOrder] Falha ao despachar ou anunciar pedido', {
+            orderId: result.order.id,
+            message: autoErr?.message,
+          });
+        }
       }
 
       const { partner: _p, ...orderPlain } = orderAfterDispatch as any;
@@ -234,6 +247,11 @@ export class DeliveryController {
     try {
       const existing = await deliveryService.getOrderById(orderId);
       await this.assertCanManageOrder(req, existing.storeId);
+
+      await deliveryPaymentService.assertPaidIfPartnerRequiresPrepaid(
+        orderId,
+        'dispatch'
+      );
 
       const order = await deliveryService.dispatchOrder(orderId);
       try {
@@ -273,6 +291,12 @@ export class DeliveryController {
         return res.status(409).json({
           error: message,
           code: 'DISPATCH_INVALID_STATUS',
+        });
+      }
+      if (error?.code === 'PAYMENT_REQUIRED_PREPAID') {
+        return res.status(402).json({
+          error: message,
+          code: 'PAYMENT_REQUIRED_PREPAID',
         });
       }
 
@@ -337,6 +361,11 @@ export class DeliveryController {
           .json({ error: 'Você não pode aceitar corrida em nome de outro usuário' });
       }
 
+      await deliveryPaymentService.assertPaidIfPartnerRequiresPrepaid(
+        orderId,
+        'accept_rider'
+      );
+
       const order = await deliveryService.acceptOrder(
         orderId,
         riderId,
@@ -346,6 +375,12 @@ export class DeliveryController {
       await this.broadcastOrderLifecycleUpdate(req.app, order as any);
       res.json(this.riderFacingOrder(order as any));
     } catch (error: any) {
+      if (error?.code === 'PAYMENT_REQUIRED_PREPAID') {
+        return res.status(402).json({
+          error: error?.message ?? 'Pagamento obrigatório antes de aceitar.',
+          code: 'PAYMENT_REQUIRED_PREPAID',
+        });
+      }
       if (error?.code === 'ORDER_ALREADY_ACCEPTED') {
         const io = getIo(req.app);
         if (io) {

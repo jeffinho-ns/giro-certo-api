@@ -336,6 +336,8 @@ export interface Partner {
   isBlocked: boolean; // Bloqueado se inadimplente
   createdAt: Date;
   updatedAt: Date;
+  /** prepaid | postpaid_pix | authorize_capture — política de cobrança ao cliente (Asaas). */
+  delivery_payment_collection_mode?: string | null;
 }
 
 export interface PartnerPayment {

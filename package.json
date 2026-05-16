@@ -16,7 +16,8 @@
     "db:migrate:user-fcm-tokens": "node scripts/run-user-fcm-token-migration.js",
     "db:migrate:bike-garage-premium": "node scripts/run-bike-garage-premium-migration.js",
     "db:migrate:delivery-registration-schema": "node scripts/run-delivery-registration-schema-migrations.js",
-    "db:wipe-delivery-orders": "node scripts/delete-all-delivery-orders.js"
+    "db:wipe-delivery-orders": "node scripts/delete-all-delivery-orders.js",
+    "db:migrate:delivery-payment": "node scripts/run-delivery-payment-migration.js"
   },
   "keywords": [
     "api",

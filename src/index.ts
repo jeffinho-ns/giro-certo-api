@@ -26,6 +26,7 @@ import alertsRoutes from './routes/alerts.routes';
 import socialRoutes from './routes/social.routes';
 import communitiesRoutes from './routes/communities.routes';
 import mapsRoutes from './routes/maps.routes';
+import webhooksRoutes from './routes/webhooks.routes';
 import { UserRole } from './types';
 import { DeliveryService } from './services/delivery.service';
 import {
@@ -80,6 +81,7 @@ app.get('/health', (req, res) => {
 });
 
 // API Routes
+app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/delivery', deliveryRoutes);
 app.use('/api/users', usersRoutes);

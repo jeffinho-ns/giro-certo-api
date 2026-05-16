@@ -9,9 +9,11 @@ import {
   UpdatePartnerPaymentDto,
   RecordPaymentDto,
 } from '../types';
+import { DeliveryPaymentService } from '../services/delivery-payment.service';
 
 const router = Router();
 const partnerService = new PartnerService();
+const deliveryPaymentService = new DeliveryPaymentService();
 
 // Listar parceiros (com filtros)
 router.get('/', authenticateToken, async (req: Request, res: Response) => {
@@ -59,6 +61,41 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
     res.status(400).json({ error: error.message });
   }
 });
+
+router.patch(
+  '/me/delivery-payment-collection-mode',
+  authenticateToken,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const userStore = await queryOne<{ partnerId: string | null }>(
+        'SELECT "partnerId" FROM "User" WHERE id = $1',
+        [req.userId]
+      );
+      if (!userStore?.partnerId) {
+        return res.status(404).json({ error: 'Você não está vinculado a nenhuma loja' });
+      }
+      const mode = req.body?.mode as string | undefined;
+      if (
+        mode !== 'prepaid' &&
+        mode !== 'postpaid_pix' &&
+        mode !== 'authorize_capture'
+      ) {
+        return res.status(400).json({
+          error:
+            'mode obrigatório: prepaid | postpaid_pix | authorize_capture',
+        });
+      }
+      await deliveryPaymentService.updatePartnerCollectionMode(
+        userStore.partnerId,
+        mode,
+        req.user
+      );
+      res.json({ ok: true, delivery_payment_collection_mode: mode });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
 
 // Feed "Minha loja" — posts que mencionam a loja (hashtag ou conteúdo). Para lojista.
 router.get('/:partnerId/feed', authenticateToken, async (req: AuthRequest, res: Response) => {
