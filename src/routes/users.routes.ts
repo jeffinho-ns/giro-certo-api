@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import path from 'path';
 import multer from 'multer';
-import { query, queryOne, transaction } from '../lib/db';
+import { query, queryOne, transaction, execute } from '../lib/db';
+import { assertPayoutBankAccountShape } from '../lib/payout-bank-account';
 import {
   uploadBuffer,
   buildObjectPath,
@@ -541,6 +542,161 @@ router.patch('/me/profile', authenticateToken, async (req: AuthRequest, res: Res
     res.status(400).json({ error: error.message });
   }
 });
+
+/**
+ * Periodicidade para taxa de liquidação (lotes de repasse do frete líquido do rider).
+ * `frequency: null` remove override e volta a usar `GIRO_RIDER_DEFAULT_SETTLEMENT_FREQUENCY`.
+ */
+router.patch(
+  '/me/delivery-settlement-settings',
+  authenticateToken,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.userId) {
+        return res.status(401).json({ error: 'Não autenticado' });
+      }
+
+      const { frequency, fee_flat_override } = (req.body || {}) as {
+        frequency?: string | null;
+        fee_flat_override?: number | null;
+      };
+
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      let idx = 1;
+
+      if (frequency !== undefined) {
+        if (
+          frequency !== null &&
+          (typeof frequency !== 'string' ||
+            !['daily', 'weekly', 'monthly'].includes(frequency))
+        ) {
+          return res.status(400).json({
+            error:
+              'frequency deve ser daily | weekly | monthly ou null para limpar preferência',
+          });
+        }
+        sets.push(`delivery_settlement_frequency = $${idx++}`);
+        vals.push(frequency === null ? null : frequency);
+      }
+
+      if (fee_flat_override !== undefined) {
+        if (
+          fee_flat_override !== null &&
+          (typeof fee_flat_override !== 'number' ||
+            !Number.isFinite(fee_flat_override) ||
+            fee_flat_override < 0)
+        ) {
+          return res.status(400).json({
+            error:
+              'fee_flat_override deve ser número >= 0 ou null para remover override',
+          });
+        }
+        sets.push(`delivery_settlement_fee_flat_override = $${idx++}`);
+        vals.push(fee_flat_override === null ? null : fee_flat_override);
+      }
+
+      if (sets.length === 0) {
+        return res.status(400).json({
+          error: 'Informe pelo menos frequency ou fee_flat_override',
+        });
+      }
+
+      sets.push(`"updatedAt" = NOW()`);
+      vals.push(req.userId);
+
+      await execute(
+        `UPDATE "User" SET ${sets.join(', ')} WHERE id = $${idx}`,
+        vals
+      );
+
+      const row = await queryOne<{
+        delivery_settlement_frequency: string | null;
+        delivery_settlement_fee_flat_override: number | null;
+      }>(
+        `SELECT delivery_settlement_frequency, delivery_settlement_fee_flat_override
+         FROM "User" WHERE id = $1`,
+        [req.userId]
+      );
+
+      res.json({
+        ok: true,
+        delivery_settlement_frequency: row?.delivery_settlement_frequency ?? null,
+        delivery_settlement_fee_flat_override:
+          row?.delivery_settlement_fee_flat_override ?? null,
+      });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+/** Conta rider para repasse Asaas (`bankAccount` no `/transfers`). */
+router.get(
+  '/me/payout-bank-profile',
+  authenticateToken,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+      const row = await queryOne<{ payout_bank_account_json: unknown }>(
+        `SELECT payout_bank_account_json FROM "User" WHERE id = $1`,
+        [req.userId]
+      );
+      const j = row?.payout_bank_account_json;
+      const payout_bank_account =
+        j != null && typeof j === 'object' && !Array.isArray(j)
+          ? (j as Record<string, unknown>)
+          : null;
+      res.json({ payout_bank_account });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+router.patch(
+  '/me/payout-bank-profile',
+  authenticateToken,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+
+      const body = req.body as { payout_bank_account?: unknown } | undefined;
+      if (!body || !('payout_bank_account' in body)) {
+        return res.status(400).json({
+          error: 'Body deve incluir payout_bank_account (objeto ou null para limpar)',
+        });
+      }
+
+      const raw = body.payout_bank_account;
+      let jsonVal: unknown = null;
+      if (raw !== null) {
+        jsonVal = assertPayoutBankAccountShape(raw);
+      }
+
+      await execute(
+        `UPDATE "User"
+         SET payout_bank_account_json = $1::jsonb, "updatedAt" = NOW()
+         WHERE id = $2`,
+        [jsonVal === null ? null : JSON.stringify(jsonVal), req.userId]
+      );
+
+      const row = await queryOne<{ payout_bank_account_json: unknown }>(
+        `SELECT payout_bank_account_json FROM "User" WHERE id = $1`,
+        [req.userId]
+      );
+      const j = row?.payout_bank_account_json;
+      const payout_bank_account =
+        j != null && typeof j === 'object' && !Array.isArray(j)
+          ? (j as Record<string, unknown>)
+          : null;
+
+      res.json({ ok: true, payout_bank_account });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
 
 // Registar token FCM para notificações push (telemóvel bloqueado)
 router.post('/me/fcm-token', authenticateToken, async (req: AuthRequest, res: Response) => {

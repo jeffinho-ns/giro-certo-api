@@ -167,22 +167,100 @@ Ver `.env.example`: `ASAAS_API_KEY`, `ASAAS_ENV`, `ASAAS_WEBHOOK_TOKEN`, `ASAAS_
 | GET | `/api/delivery/:orderId/payments/latest` | Bearer lojista ou ADMIN | Último registro de pagamento do pedido. |
 | PATCH | `/api/partners/me/delivery-payment-collection-mode` | Bearer lojista | Body `{ "mode": "prepaid" \| "postpaid_pix" \| "authorize_capture" }`. |
 | POST | `/api/webhooks/asaas` | Cabeçalho `asaas-access-token` = `ASAAS_WEBHOOK_TOKEN` | Webhook Asaas (JSON). |
+| GET | `/api/settlement/ledger/pending-summary` | Bearer **ADMIN** | Totais ainda não alocados em lote (`pending` + sem `settlement_batch_id`). |
+| POST | `/api/settlement/batches/compose-from-ledger` | Bearer **ADMIN** | Body opcional `{ "cutoffAt": "ISO8601" }`. Agrupa pendências por loja e rider. |
+| GET | `/api/settlement/batches` | Bearer **ADMIN** | Query `limit`, `status` opcional. Lista lotes. |
+| GET | `/api/settlement/batches/:batchId` | Bearer **ADMIN** | Detalhe do lote. |
+| PATCH | `/api/partners/me/settlement-settings` | Bearer lojista | Body opcional `{ "frequency": "daily"\|"weekly"\|"monthly", "fee_flat_override": number \| null }` — define periodicidade para taxa de lote na loja. |
+| PATCH | `/api/users/me/delivery-settlement-settings` | Bearer usuário | Idem rider (opcional `{ "frequency": null }` volta ao default do env). |
+| POST | `/api/settlement/batches/compose-scheduled` | Header `x-giro-cron-secret` = **`GIRO_CRON_SECRET`** | Mesmo compose que o admin sem JWT — para Cron. Body opcional `{ "cutoffAt": "ISO8601" }`. |
+| POST | `/api/settlement/batches/:batchId/execute-transfer` | Bearer **ADMIN** | Body opcional `{ "bankAccount": { … }, "description"?: string }`. Se **omitir** `bankAccount`, usa `payout_bank_account_json` do lojista (**partner**) ou do rider conforme o lote — exige migração Fase 3 e perfil preenchido. Requer `ASAAS_ENABLE_PAYOUTS=true`. |
+| GET | `/api/partners/me/payout-bank-profile` | Bearer lojista | `{ "payout_bank_account": object \| null }` — dados salvos para repasse. |
+| PATCH | `/api/partners/me/payout-bank-profile` | Bearer lojista | Body `{ "payout_bank_account": { … } \| null }` — grava objeto compatível Asaas `/transfers` ou `null` para limpar. |
+| GET | `/api/users/me/payout-bank-profile` | Bearer usuário | Idem dados de repasse do rider. |
+| PATCH | `/api/users/me/payout-bank-profile` | Bearer usuário | Idem PATCH lojista para o próprio utilizador rider. |
+| POST | `/api/settlement/reconcile/payments` | Bearer **ADMIN** | Body opcional `{"limit": number}`. Sincroniza cobranças abertas com Asaas GET `/payments/:id`. |
+| POST | `/api/settlement/reconcile/transfers` | Bearer **ADMIN** | Body opcional `{"limit": number}`. Lotes `transfer_done`: GET `/transfers/:id`; falha Asaas marca `transfer_failed`. |
+| POST | `/api/settlement/reconcile-scheduled` | Header `x-giro-cron-secret` | Cron: mesmo efeito; body opc. `payments`/`transfers`/`paymentLimit`/`transferLimit`. |
 
 **Webhook:** configurar URL pública no painel Asaas apontando para `POST .../api/webhooks/asaas`.
 
 ### 6.4 Regras atuais da cobrança “initiate”
 
-- Pedido em **`awaiting_dispatch`** ou **`pending` sem rider aceito**.  
+- **`prepaid`** (modo pré-pago): só em **`awaiting_dispatch`** ou **`pending` sem rider aceito** (como antes).  
+- **`postpaid_pix`** e **`authorize_capture`**: além desses dois estados antigos, permite **`initiate`** com pedido já em corrida (**`accepted`**, **`arrivedAtStore`**, **`inTransit`**, **`arrivedAtDestination`**, **`inProgress`**).  
+- **`completed`** / **`cancelled`**: nunca permite nova cobrança.  
 - **Snapshot de valores:** total ao cliente = `value + deliveryFee`; taxas fixas por env (`GIRO_PLATFORM_FEE_STORE_FIXED`, `GIRO_PLATFORM_FEE_RIDER_PER_ORDER`).  
 - Telefone do destinatário obrigatório (10+ dígitos) para criar cliente Asaas.  
-- **Modos `postpaid_pix` e `authorize_capture`:** política já gravada na loja; fluxo operacional completo virá nas próximas iterações.
+- **`authorize_capture`**: política já gravada na loja; integração técnica de “autorizar + capturar” com cartão no Asaas pode ser refinada mais tarde (`initiate` continua usando o fluxo de cobrança padrão enquanto isso).
 
-### 6.5 Ainda não implementado (próximas fases)
+### 6.5 Script Fase 3 — conta repasse beneficiário
 
-- Repasses agendados (dia/semana/mês) e taxas de liquidação.  
-- Bloqueio rigoroso do fluxo logístico até `paid` conforme política da loja.  
-- Checkout no app Flutter / deep link dedicado.  
-- Job de reconciliação automática.
+- `scripts/migrate-payout-bank-profile.sql` → `npm run db:migrate:payout-bank-profile`  
+- Colunas **`Partner.payout_bank_account_json`** e **`User.payout_bank_account_json`** (JSONB opcional).
+
+### 6.6 Fase 2 — livro, lotes e compose (recap)
+
+- Scripts: **`npm run db:migrate:delivery-settlement-ledger`** · **`npm run db:migrate:delivery-settlement-batches`** (nessa ordem).
+- **`DeliverySettlementLedger`**: registada quando `DeliveryPayment` fica **`paid`**; **`riderUserId`** atualizado ao rider aceitar se ainda nulo.
+- **`GET /api/settlement/ledger/pending-summary`**: totais `pending` agregados.
+- **`Partner.delivery_settlement_frequency`** / **`fee_flat_override`** (e overrides em **`User`** para rider); **`DeliverySettlementBatch`** até `transfer_done` + **`asaas_transfer_id`** opcional.
+- **Compose**, **cron** (`compose-scheduled` + **`GIRO_CRON_SECRET`**), **`execute-transfer`** opcional com **`ASAAS_ENABLE_PAYOUTS=true`**.
+
+### 6.7 Fase 3 nesta sprint (perfis de repasse + initiate em corrida)
+
+- Migração **`payout_bank_account_json`** (`npm run db:migrate:payout-bank-profile`).
+- Perfis **`GET/PATCH`** `/api/partners/me/payout-bank-profile` e `/api/users/me/payout-bank-profile`.
+- **`execute-transfer`** sem `bankAccount` no body → usa perfil gravado conforme **`beneficiary_type`** do lote.
+- **`postpaid_pix` / `authorize_capture`**: `initiate` permitido também com pedido em corrida (**`accepted`**, **`arrivedAtStore`**, **`inTransit`**, **`arrivedAtDestination`**, **`inProgress`**).
+
+- **Reconciliação:** `POST /api/settlement/reconcile/payments`, `POST /api/settlement/reconcile/transfers` e **`reconcile-scheduled`** (cron, `GIRO_CRON_SECRET`).
+
+### 6.8 Fase 4 — operação admin + defaults por modo
+
+- **Painel** `giro-certo-next`: rota **`/dashboard/settlements`** — resumo do livro, compor lotes, reconciliar cobranças/transferências, listar lotes e **Repassar** (usa `payout_bank_account_json` do beneficiário).
+- **`resolveInitiateBillingType`**: sem `billingType` no body → `PIX` em `postpaid_pix`, `CREDIT_CARD` em `authorize_capture`, `UNDEFINED` em `prepaid`.
+- **Cron Render** (sugestão): além de `compose-scheduled`, agendar `POST /api/settlement/reconcile-scheduled` (ex.: a cada 15–30 min) com o mesmo `x-giro-cron-secret`.
+
+### 6.9 Escopo fechado — pagamentos entrega (MVP)
+
+As fases **1–4** abaixo cobrem o MVP de pagamentos/repasses para **serviço de entrega**. Itens fora deste escopo ficam no produto geral (disputas §5.7, extrato próprio, captura Asaas em duas etapas).
+
+| Fase | Entregue |
+|------|----------|
+| 1 | Cobrança Asaas, webhook, `DeliveryPayment`, modos na loja, Flutter checkout pré-pago |
+| 2 | Livro `DeliverySettlementLedger`, lotes, compose/cron, `execute-transfer` |
+| 3 | `payout_bank_account_json`, perfis GET/PATCH, `initiate` em corrida (pós-pago) |
+| 4 | Reconciliação API + cron, painel `/dashboard/settlements`, defaults `billingType` |
+
+### 6.10 Checklist go-live (pagamentos entrega)
+
+**Base de dados (ordem):**
+
+1. `npm run db:migrate:delivery-payment`
+2. `npm run db:migrate:delivery-settlement-ledger`
+3. `npm run db:migrate:delivery-settlement-batches`
+4. `npm run db:migrate:payout-bank-profile`
+
+**Variáveis (API):** `ASAAS_API_KEY`, `ASAAS_WEBHOOK_TOKEN`, `ASAAS_ENV`, `GIRO_PLATFORM_FEE_*`, `GIRO_SETTLEMENT_FEE_*`, `GIRO_CRON_SECRET`; opcional `ASAAS_ENABLE_PAYOUTS=true` quando for repassar; `ASAAS_FALLBACK_PAYER_CPF` em sandbox.
+
+**Asaas:** webhook `POST {API}/api/webhooks/asaas` com cabeçalho `asaas-access-token`.
+
+**Cron Render (mesmo `GIRO_CRON_SECRET`, header `x-giro-cron-secret`):**
+
+| Job | Método | Sugestão |
+|-----|--------|----------|
+| Compor lotes | `POST /api/settlement/batches/compose-scheduled` | 1×/dia (ex. 03:00) |
+| Reconciliar | `POST /api/settlement/reconcile-scheduled` body `{}` | a cada 15–30 min |
+
+**Smoke test:** loja `prepaid` → `initiate` → webhook `paid` → despacho → rider aceita → admin compõe lote → repasse (sandbox) com perfil bancário preenchido no app.
+
+**Apps:** lojista em Configurações → Pagamentos (modo + conta); rider → conta de repasse; admin → Repasses Asaas.
+
+### 6.11 Backlog pós-MVP pagamentos
+
+- Extrato financeiro próprio vs Asaas · disputas/reembolsos operacionais (§5.7).
+- Captura tardia Asaas (authorize + capture explícitos) além do checkout com cartão.
 
 ---
 

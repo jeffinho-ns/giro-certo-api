@@ -22,30 +22,41 @@ export class DeliveryPaymentController {
               return undefined;
             })();
 
-      const row = await service.initiateCheckout({
+      const { row, pixQr } = await service.initiateCheckout({
         orderId,
         actorUser: req.user,
         billingType,
         idempotencyKey,
       });
 
-      res.status(201).json({
-        payment: {
-          id: row.id,
-          status: row.status,
-          customerTotal: row.customerTotal,
-          itemValueSnapshot: row.itemValueSnapshot,
-          deliveryFeeSnapshot: row.deliveryFeeSnapshot,
-          platformFeeStore: row.platformFeeStore,
-          platformFeeRider: row.platformFeeRider,
-          storeNetSnapshot: row.storeNetSnapshot,
-          riderNetSnapshot: row.riderNetSnapshot,
-          collectionMode: row.collectionMode,
-          invoiceUrl: row.invoiceUrl,
-          bankSlipUrl: row.bankSlipUrl,
-          asaasPaymentId: row.asaasPaymentId,
-        },
-      });
+      const payment: Record<string, unknown> = {
+        id: row.id,
+        status: row.status,
+        customerTotal: row.customerTotal,
+        itemValueSnapshot: row.itemValueSnapshot,
+        deliveryFeeSnapshot: row.deliveryFeeSnapshot,
+        platformFeeStore: row.platformFeeStore,
+        platformFeeRider: row.platformFeeRider,
+        storeNetSnapshot: row.storeNetSnapshot,
+        riderNetSnapshot: row.riderNetSnapshot,
+        collectionMode: row.collectionMode,
+        invoiceUrl: row.invoiceUrl,
+        bankSlipUrl: row.bankSlipUrl,
+        asaasPaymentId: row.asaasPaymentId,
+        billingType: row.billingTypeRequested,
+      };
+
+      if (pixQr?.payload?.trim()) {
+        payment.pixCopyPaste = pixQr.payload.trim();
+      }
+      if (pixQr?.encodedImage?.trim()) {
+        payment.pixQrCodeImageBase64 = pixQr.encodedImage.trim();
+      }
+      if (pixQr?.expirationDate) {
+        payment.pixExpirationDate = pixQr.expirationDate;
+      }
+
+      res.status(201).json({ payment });
     } catch (e: any) {
       const msg = e?.message || 'Erro ao criar cobrança';
       const code =
@@ -67,21 +78,35 @@ export class DeliveryPaymentController {
       if (!row) {
         return res.status(404).json({ error: 'Nenhuma cobrança registrada' });
       }
-      res.json({
-        payment: {
-          id: row.id,
-          status: row.status,
-          customerTotal: row.customerTotal,
-          platformFeeStore: row.platformFeeStore,
-          platformFeeRider: row.platformFeeRider,
-          storeNetSnapshot: row.storeNetSnapshot,
-          riderNetSnapshot: row.riderNetSnapshot,
-          collectionMode: row.collectionMode,
-          invoiceUrl: row.invoiceUrl,
-          paidAt: row.paidAt,
-          asaasPaymentId: row.asaasPaymentId,
-        },
-      });
+
+      const pixQr = await service.getPixQrForOpenPayment(row);
+
+      const payment: Record<string, unknown> = {
+        id: row.id,
+        status: row.status,
+        customerTotal: row.customerTotal,
+        platformFeeStore: row.platformFeeStore,
+        platformFeeRider: row.platformFeeRider,
+        storeNetSnapshot: row.storeNetSnapshot,
+        riderNetSnapshot: row.riderNetSnapshot,
+        collectionMode: row.collectionMode,
+        invoiceUrl: row.invoiceUrl,
+        paidAt: row.paidAt,
+        asaasPaymentId: row.asaasPaymentId,
+        billingType: row.billingTypeRequested,
+      };
+
+      if (pixQr?.payload?.trim()) {
+        payment.pixCopyPaste = pixQr.payload.trim();
+      }
+      if (pixQr?.encodedImage?.trim()) {
+        payment.pixQrCodeImageBase64 = pixQr.encodedImage.trim();
+      }
+      if (pixQr?.expirationDate) {
+        payment.pixExpirationDate = pixQr.expirationDate;
+      }
+
+      res.json({ payment });
     } catch (e: any) {
       res.status(400).json({ error: e?.message || 'Erro' });
     }

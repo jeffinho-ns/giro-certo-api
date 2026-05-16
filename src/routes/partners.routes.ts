@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { PartnerService } from '../services/partner.service';
 import { authenticateToken, AuthRequest, requireAdmin, requireModerator } from '../middleware/auth';
-import { query, queryOne } from '../lib/db';
+import { query, queryOne, execute } from '../lib/db';
 import {
   CreatePartnerDto,
   UpdatePartnerDto,
@@ -10,6 +10,7 @@ import {
   RecordPaymentDto,
 } from '../types';
 import { DeliveryPaymentService } from '../services/delivery-payment.service';
+import { assertPayoutBankAccountShape } from '../lib/payout-bank-account';
 
 const router = Router();
 const partnerService = new PartnerService();
@@ -96,6 +97,164 @@ router.patch(
     }
   }
 );
+
+/** Preferências de periodicidade da taxa de liquidação (agrupamento em lote). */
+router.patch('/me/settlement-settings', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+    const userStore = await queryOne<{ partnerId: string | null }>(
+      'SELECT "partnerId" FROM "User" WHERE id = $1',
+      [req.userId]
+    );
+    if (!userStore?.partnerId) {
+      return res.status(404).json({ error: 'Você não está vinculado a nenhuma loja' });
+    }
+
+    const { frequency, fee_flat_override } = (req.body || {}) as {
+      frequency?: string;
+      fee_flat_override?: number | null;
+    };
+
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let idx = 1;
+
+    if (frequency !== undefined) {
+      if (
+        typeof frequency !== 'string' ||
+        !['daily', 'weekly', 'monthly'].includes(frequency)
+      ) {
+        return res.status(400).json({
+          error: 'frequency deve ser daily | weekly | monthly',
+        });
+      }
+      sets.push(`delivery_settlement_frequency = $${idx++}`);
+      vals.push(frequency);
+    }
+
+    if (fee_flat_override !== undefined) {
+      if (
+        fee_flat_override !== null &&
+        (typeof fee_flat_override !== 'number' ||
+          !Number.isFinite(fee_flat_override) ||
+          fee_flat_override < 0)
+      ) {
+        return res.status(400).json({
+          error: 'fee_flat_override deve ser número >= 0 ou null para remover override',
+        });
+      }
+      sets.push(`delivery_settlement_fee_flat_override = $${idx++}`);
+      vals.push(fee_flat_override === null ? null : fee_flat_override);
+    }
+
+    if (sets.length === 0) {
+      return res.status(400).json({
+        error: 'Informe pelo menos frequency ou fee_flat_override',
+      });
+    }
+
+    sets.push(`"updatedAt" = NOW()`);
+    vals.push(userStore.partnerId);
+
+    await execute(
+      `UPDATE "Partner" SET ${sets.join(', ')} WHERE id = $${idx}`,
+      vals
+    );
+
+    const row = await queryOne<{
+      delivery_settlement_frequency: string;
+      delivery_settlement_fee_flat_override: number | null;
+    }>(
+      `SELECT delivery_settlement_frequency, delivery_settlement_fee_flat_override
+       FROM "Partner" WHERE id = $1`,
+      [userStore.partnerId]
+    );
+
+    res.json({
+      ok: true,
+      delivery_settlement_frequency: row?.delivery_settlement_frequency ?? 'weekly',
+      delivery_settlement_fee_flat_override:
+        row?.delivery_settlement_fee_flat_override ?? null,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+/** Conta beneficiária para repasse Asaas (`bankAccount`). GET devolve objeto salvo ou null. */
+router.get('/me/payout-bank-profile', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+    const userStore = await queryOne<{ partnerId: string | null }>(
+      'SELECT "partnerId" FROM "User" WHERE id = $1',
+      [req.userId]
+    );
+    if (!userStore?.partnerId) {
+      return res.status(404).json({ error: 'Você não está vinculado a nenhuma loja' });
+    }
+    const row = await queryOne<{ payout_bank_account_json: unknown }>(
+      `SELECT payout_bank_account_json FROM "Partner" WHERE id = $1`,
+      [userStore.partnerId]
+    );
+    const j = row?.payout_bank_account_json;
+    const payout_bank_account =
+      j != null && typeof j === 'object' && !Array.isArray(j)
+        ? (j as Record<string, unknown>)
+        : null;
+    res.json({
+      payout_bank_account,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.patch('/me/payout-bank-profile', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+    const userStore = await queryOne<{ partnerId: string | null }>(
+      'SELECT "partnerId" FROM "User" WHERE id = $1',
+      [req.userId]
+    );
+    if (!userStore?.partnerId) {
+      return res.status(404).json({ error: 'Você não está vinculado a nenhuma loja' });
+    }
+
+    const body = req.body as { payout_bank_account?: unknown } | undefined;
+    if (!body || !('payout_bank_account' in body)) {
+      return res.status(400).json({ error: 'Body deve incluir payout_bank_account (objeto ou null para limpar)' });
+    }
+
+    const raw = body.payout_bank_account;
+    let jsonbPayload: unknown = null;
+    if (raw !== null) {
+      const shaped = assertPayoutBankAccountShape(raw);
+      jsonbPayload = shaped;
+    }
+
+    await execute(
+      `UPDATE "Partner"
+       SET payout_bank_account_json = $1::jsonb, "updatedAt" = NOW()
+       WHERE id = $2`,
+      [jsonbPayload === null ? null : JSON.stringify(jsonbPayload), userStore.partnerId]
+    );
+
+    const row = await queryOne<{ payout_bank_account_json: unknown }>(
+      `SELECT payout_bank_account_json FROM "Partner" WHERE id = $1`,
+      [userStore.partnerId]
+    );
+    const payout_bank_account =
+      row?.payout_bank_account_json && typeof row.payout_bank_account_json === 'object'
+        ? (row.payout_bank_account_json as Record<string, unknown>)
+        : null;
+
+    res.json({ ok: true, payout_bank_account });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
 
 // Feed "Minha loja" — posts que mencionam a loja (hashtag ou conteúdo). Para lojista.
 router.get('/:partnerId/feed', authenticateToken, async (req: AuthRequest, res: Response) => {

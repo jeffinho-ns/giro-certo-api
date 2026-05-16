@@ -10,6 +10,7 @@ import { incrementOpsMetric, observeOpsMetric } from '../utils/ops-metrics';
 import { ioEmit, ioEmitToRoom } from '../utils/socket-events';
 import { GooglePlacesService } from './google-places.service';
 import { WhatsAppParser } from '../utils/whatsapp-parser';
+import { DeliverySettlementLedgerService } from './delivery-settlement-ledger.service';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
@@ -596,6 +597,18 @@ export class DeliveryService {
       }
     }
     await incrementOpsMetric('orders_accepted_total');
+    try {
+      await new DeliverySettlementLedgerService().assignRiderToLedgerForOrder(
+        orderId,
+        riderId
+      );
+    } catch (ledgerErr: any) {
+      console.warn(
+        '[DeliverySettlementLedger] associate rider',
+        orderId,
+        ledgerErr?.message
+      );
+    }
     await this.storeIdempotencyResponse(scope, idempotencyKey, finalOrder);
     return finalOrder;
   }

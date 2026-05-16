@@ -17,7 +17,10 @@
     "db:migrate:bike-garage-premium": "node scripts/run-bike-garage-premium-migration.js",
     "db:migrate:delivery-registration-schema": "node scripts/run-delivery-registration-schema-migrations.js",
     "db:wipe-delivery-orders": "node scripts/delete-all-delivery-orders.js",
-    "db:migrate:delivery-payment": "node scripts/run-delivery-payment-migration.js"
+    "db:migrate:delivery-payment": "node scripts/run-delivery-payment-migration.js",
+    "db:migrate:delivery-settlement-ledger": "node scripts/run-delivery-settlement-ledger-migration.js",
+    "db:migrate:delivery-settlement-batches": "node scripts/run-delivery-settlement-batches-migration.js",
+    "db:migrate:payout-bank-profile": "node scripts/run-payout-bank-profile-migration.js"
   },
   "keywords": [
     "api",

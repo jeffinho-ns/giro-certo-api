@@ -109,6 +109,38 @@ export async function asaasGetPayment(
   return asaasRequest('GET', `/payments/${encodeURIComponent(paymentId)}`);
 }
 
+/** QR dinâmico PIX da cobrança (após `billingType: PIX`). */
+export async function asaasGetPixQrCode(
+  paymentId: string
+): Promise<Record<string, unknown>> {
+  return asaasRequest(
+    'GET',
+    `/payments/${encodeURIComponent(paymentId)}/pixQrCode`
+  );
+}
+
+/** Repasse para conta externa (PIX/TED). Ver documentação Asaas `/transfers`. */
+export async function asaasCreateOutboundTransfer(body: {
+  value: number;
+  bankAccount: Record<string, unknown>;
+  description?: string;
+  externalReference?: string;
+  scheduleDate?: string;
+  operationType?: 'PIX' | 'TED';
+}): Promise<Record<string, unknown>> {
+  return asaasRequest('POST', '/transfers', body);
+}
+
+/** Estado de uma transferência PIX/TED (reconciliação). */
+export async function asaasGetTransfer(
+  transferId: string
+): Promise<Record<string, unknown>> {
+  return asaasRequest(
+    'GET',
+    `/transfers/${encodeURIComponent(transferId)}`
+  );
+}
+
 export function isAsaasConfigured(): boolean {
   return Boolean(process.env.ASAAS_API_KEY?.trim());
 }
