@@ -1,5 +1,7 @@
 # Playbook Operacional - Giro Certo
 
+> **Go-live entrega:** plano completo em [docs/GO_LIVE_ENTREGA.md](docs/GO_LIVE_ENTREGA.md) (migrações, env, smoke tests, rollout T0–T3).
+
 ## 1) Conflito de aceite
 - Regra: primeiro aceite confirmado pela API vence.
 - Sinal: erro `ORDER_ALREADY_ACCEPTED` para os demais entregadores.
