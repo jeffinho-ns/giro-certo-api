@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import path from 'path';
 import multer from 'multer';
 import { query, queryOne, transaction, execute } from '../lib/db';
-import { assertPayoutBankAccountShape } from '../lib/payout-bank-account';
+import { assertPayoutProfileShape } from '../lib/payout-bank-account';
 import {
   uploadBuffer,
   buildObjectPath,
@@ -671,7 +671,7 @@ router.patch(
       const raw = body.payout_bank_account;
       let jsonVal: unknown = null;
       if (raw !== null) {
-        jsonVal = assertPayoutBankAccountShape(raw);
+        jsonVal = assertPayoutProfileShape(raw);
       }
 
       await execute(

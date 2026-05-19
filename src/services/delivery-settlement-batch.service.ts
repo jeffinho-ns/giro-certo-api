@@ -1,6 +1,9 @@
 import { generateId } from '../utils/id';
 import { query, queryOne, transaction, execute } from '../lib/db';
-import { assertPayoutBankAccountShape } from '../lib/payout-bank-account';
+import {
+  assertPayoutProfileShape,
+  buildAsaasTransferPayloadFromProfile,
+} from '../lib/payout-bank-account';
 import { asaasCreateOutboundTransfer, asaasGetTransfer, isAsaasConfigured } from './asaas.service';
 
 export type SettlementFrequency = 'daily' | 'weekly' | 'monthly';
@@ -283,7 +286,7 @@ export class DeliverySettlementBatchService {
         [pid]
       );
       const row = r.rows[0];
-      return assertPayoutBankAccountShape(row?.payout_bank_account_json ?? null);
+      return assertPayoutProfileShape(row?.payout_bank_account_json ?? null);
     }
     if (batch.beneficiary_type === 'rider') {
       const uid = batch.rider_user_id?.trim();
@@ -295,7 +298,7 @@ export class DeliverySettlementBatchService {
         [uid]
       );
       const row = r.rows[0];
-      return assertPayoutBankAccountShape(row?.payout_bank_account_json ?? null);
+      return assertPayoutProfileShape(row?.payout_bank_account_json ?? null);
     }
     throw new Error(`Tipo de beneficiário desconhecido: ${batch.beneficiary_type}`);
   }
@@ -342,16 +345,18 @@ export class DeliverySettlementBatchService {
         opts.description ||
         `Repasse Giro Certo ${b.beneficiary_type} #${b.id.slice(-8)}`;
 
-      let bankPayload: Record<string, unknown>;
+      let profilePayload: Record<string, unknown>;
       if (opts.bankAccount && typeof opts.bankAccount === 'object') {
-        bankPayload = assertPayoutBankAccountShape(opts.bankAccount);
+        profilePayload = assertPayoutProfileShape(opts.bankAccount);
       } else {
-        bankPayload = await this.resolveStoredPayoutBankAccount(client, b);
+        profilePayload = await this.resolveStoredPayoutBankAccount(client, b);
       }
+
+      const transferBody = buildAsaasTransferPayloadFromProfile(profilePayload);
 
       const remote = (await asaasCreateOutboundTransfer({
         value: b.net_payable,
-        bankAccount: bankPayload,
+        ...transferBody,
         description: desc,
         externalReference: externalRef,
       })) as Record<string, unknown>;

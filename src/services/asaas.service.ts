@@ -122,12 +122,17 @@ export async function asaasGetPixQrCode(
 /** Repasse para conta externa (PIX/TED). Ver documentação Asaas `/transfers`. */
 export async function asaasCreateOutboundTransfer(body: {
   value: number;
-  bankAccount: Record<string, unknown>;
+  bankAccount?: Record<string, unknown>;
+  pixAddressKey?: string;
+  pixAddressKeyType?: string;
   description?: string;
   externalReference?: string;
   scheduleDate?: string;
   operationType?: 'PIX' | 'TED';
 }): Promise<Record<string, unknown>> {
+  if (!body.bankAccount && !body.pixAddressKey) {
+    throw new Error('Repasse Asaas exige bankAccount ou pixAddressKey');
+  }
   return asaasRequest('POST', '/transfers', body);
 }
 

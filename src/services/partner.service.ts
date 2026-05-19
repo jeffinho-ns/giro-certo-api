@@ -173,7 +173,12 @@ export class PartnerService {
    * Buscar parceiro por ID (com informações de pagamento)
    */
   async getPartnerById(partnerId: string) {
-    const partner = await queryOne<Partner & { payment: PartnerPayment | null }>(
+    const partner = await queryOne<
+      Partner & {
+        payment: PartnerPayment | null;
+        linked_users: Array<{ id: string; name: string; email: string | null }> | null;
+      }
+    >(
       `SELECT 
         p.*,
         CASE 
@@ -191,7 +196,18 @@ export class PartnerService {
             'updatedAt', pp."updatedAt"
           )
           ELSE NULL
-        END as payment
+        END as payment,
+        (
+          SELECT COALESCE(
+            json_agg(
+              json_build_object('id', u.id, 'name', u.name, 'email', u.email)
+              ORDER BY u.email
+            ),
+            '[]'::json
+          )
+          FROM "User" u
+          WHERE u."partnerId" = p.id
+        ) as linked_users
        FROM "Partner" p
        LEFT JOIN "PartnerPayment" pp ON pp."partnerId" = p.id AND pp.status = 'ACTIVE'
        WHERE p.id = $1`,

@@ -338,6 +338,9 @@ export interface Partner {
   updatedAt: Date;
   /** prepaid | postpaid_pix | authorize_capture — política de cobrança ao cliente (Asaas). */
   delivery_payment_collection_mode?: string | null;
+  delivery_settlement_frequency?: string | null;
+  payout_bank_account_json?: Record<string, unknown> | null;
+  linked_users?: Array<{ id: string; name: string; email: string | null }>;
 }
 
 export interface PartnerPayment {

@@ -10,7 +10,7 @@ import {
   RecordPaymentDto,
 } from '../types';
 import { DeliveryPaymentService } from '../services/delivery-payment.service';
-import { assertPayoutBankAccountShape } from '../lib/payout-bank-account';
+import { assertPayoutProfileShape } from '../lib/payout-bank-account';
 
 const router = Router();
 const partnerService = new PartnerService();
@@ -230,7 +230,7 @@ router.patch('/me/payout-bank-profile', authenticateToken, async (req: AuthReque
     const raw = body.payout_bank_account;
     let jsonbPayload: unknown = null;
     if (raw !== null) {
-      const shaped = assertPayoutBankAccountShape(raw);
+      const shaped = assertPayoutProfileShape(raw);
       jsonbPayload = shaped;
     }
 
