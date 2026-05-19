@@ -7,6 +7,9 @@ const GOOGLE_PLACES_DETAILS_URL =
 const OSM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search';
 const PHOTON_SEARCH_URL = 'https://photon.komoot.io/api/';
 
+/** Centro SP — viés para entregas na capital. */
+const SP_BIAS = { lat: -23.5505, lon: -46.6333 };
+
 export interface PlaceAutocompleteResult {
   placeId: string;
   description: string;
@@ -63,6 +66,10 @@ export class GooglePlacesService {
     url.searchParams.set('key', key);
     url.searchParams.set('language', 'pt-BR');
     url.searchParams.set('components', 'country:br');
+    if (this.looksLikeSaoPaulo(term)) {
+      url.searchParams.set('location', `${SP_BIAS.lat},${SP_BIAS.lon}`);
+      url.searchParams.set('radius', '50000');
+    }
     if (sessionToken && sessionToken.trim().length > 0) {
       url.searchParams.set('sessiontoken', sessionToken.trim());
     }
@@ -161,28 +168,91 @@ export class GooglePlacesService {
     };
   }
 
-  private async autocompleteWithGeocoders(term: string): Promise<PlaceAutocompleteResult[]> {
-    try {
-      const osm = await this.autocompleteWithOsm(term);
-      if (osm.length > 0) return osm;
-    } catch (err) {
-      console.warn('[Places] OSM autocomplete falhou; tentando Photon', err);
+  /** Variantes: texto completo, sem acento, rua+número+cidade, etc. */
+  private buildSearchVariants(term: string): string[] {
+    const out: string[] = [];
+    const add = (s: string) => {
+      const t = s.trim();
+      if (t.length >= 3 && !out.includes(t)) out.push(t);
+    };
+
+    add(term);
+    const noAccent = term.normalize('NFD').replace(/\p{M}/gu, '');
+    add(noAccent);
+
+    const parts = term
+      .split(/[,;]+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    if (parts.length >= 2) {
+      add(parts.slice(0, 2).join(', '));
+      if (parts.length >= 3) {
+        add(parts.slice(0, 3).join(', '));
+      }
+      const city = parts[parts.length - 1];
+      add(`${parts[0]}, ${city}`);
+      if (parts.length >= 3) {
+        add(`${parts[0]}, ${parts[1]}, ${city}`);
+      }
     }
-    try {
-      return await this.autocompleteWithPhoton(term);
-    } catch (err) {
-      console.warn('[Places] Photon autocomplete falhou', err);
+
+    return out.slice(0, 6);
+  }
+
+  private looksLikeSaoPaulo(term: string): boolean {
+    const n = term
+      .normalize('NFD')
+      .replace(/\p{M}/gu, '')
+      .toLowerCase();
+    return n.includes('sao paulo') || n.includes('sp');
+  }
+
+  private async autocompleteWithGeocoders(term: string): Promise<PlaceAutocompleteResult[]> {
+    const variants = this.buildSearchVariants(term);
+    const merged = new Map<string, PlaceAutocompleteResult>();
+
+    const absorb = (rows: PlaceAutocompleteResult[]) => {
+      for (const r of rows) {
+        const key = `${r.placeId}|${r.description}`;
+        if (!merged.has(key)) merged.set(key, r);
+      }
+    };
+
+    for (const v of variants) {
+      try {
+        absorb(await this.autocompleteWithOsm(v));
+        if (merged.size >= 8) break;
+      } catch (err) {
+        console.warn('[Places] OSM variant failed', v.slice(0, 40), err);
+      }
+    }
+
+    if (merged.size < 1) {
+      for (const v of variants) {
+        try {
+          absorb(await this.autocompleteWithPhoton(v));
+          if (merged.size >= 8) break;
+        } catch (err) {
+          console.warn('[Places] Photon variant failed', v.slice(0, 40), err);
+        }
+      }
+    }
+
+    const list = [...merged.values()].slice(0, 8);
+    if (list.length === 0) {
       throw new Error(
-        'Não foi possível buscar endereços agora. Tente incluir bairro e cidade, ou use "Usar endereço da loja".'
+        'Não foi possível buscar endereços. Tente "Rua, número - bairro, São Paulo" ou use "Usar endereço da loja".'
       );
     }
+    return list;
   }
 
   private async autocompleteWithOsm(input: string): Promise<PlaceAutocompleteResult[]> {
     const url = new URL(OSM_SEARCH_URL);
     url.searchParams.set('q', input);
     url.searchParams.set('format', 'jsonv2');
-    url.searchParams.set('limit', '6');
+    url.searchParams.set('limit', '8');
     url.searchParams.set('countrycodes', 'br');
     url.searchParams.set('addressdetails', '1');
 
@@ -208,8 +278,13 @@ export class GooglePlacesService {
   private async autocompleteWithPhoton(input: string): Promise<PlaceAutocompleteResult[]> {
     const url = new URL(PHOTON_SEARCH_URL);
     url.searchParams.set('q', input);
-    url.searchParams.set('limit', '6');
-    url.searchParams.set('lang', 'pt');
+    url.searchParams.set('limit', '8');
+    // Não usar lang=pt — Photon responde HTTP 400 com esse parâmetro.
+
+    if (this.looksLikeSaoPaulo(input)) {
+      url.searchParams.set('lat', String(SP_BIAS.lat));
+      url.searchParams.set('lon', String(SP_BIAS.lon));
+    }
 
     const res = await fetch(url.toString(), {
       headers: { Accept: 'application/json' },
@@ -228,6 +303,8 @@ export class GooglePlacesService {
           city?: string;
           state?: string;
           country?: string;
+          district?: string;
+          locality?: string;
         };
       }>;
     };
@@ -236,9 +313,15 @@ export class GooglePlacesService {
       data.features?.map((f) => {
         const coords = f.geometry?.coordinates;
         const p = f.properties ?? {};
-        const line1 = [p.street, p.housenumber].filter(Boolean).join(', ') || p.name || '';
-        const line2 = [p.city, p.state, p.country].filter(Boolean).join(', ');
-        const display = [line1, line2].filter((s) => s && s.length > 0).join(' - ') || line2;
+        const streetLine = [p.street, p.housenumber].filter(Boolean).join(', ');
+        const area = [p.district, p.locality, p.city].filter(Boolean).join(', ');
+        const line1 = streetLine || p.name || '';
+        const line2 = [area, p.state, p.country].filter(Boolean).join(', ');
+        const display =
+          [line1, line2].filter((s) => s && s.length > 0).join(' - ') ||
+          p.name ||
+          line2 ||
+          'Endereço';
         return {
           display_name: display,
           lat: coords ? String(coords[1]) : undefined,
@@ -285,7 +368,9 @@ export class GooglePlacesService {
 
   private coordsTokenToDetails(token: string, prefix: string): PlaceDetailsResult {
     const raw = token.slice(prefix.length);
-    const [coordPart, encodedAddress] = raw.split('|');
+    const pipeIdx = raw.indexOf('|');
+    const coordPart = pipeIdx >= 0 ? raw.slice(0, pipeIdx) : raw;
+    const encodedAddress = pipeIdx >= 0 ? raw.slice(pipeIdx + 1) : '';
     const [latText, lngText] = coordPart.split(',');
     const lat = Number(latText);
     const lng = Number(lngText);
