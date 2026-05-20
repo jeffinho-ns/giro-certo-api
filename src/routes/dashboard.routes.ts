@@ -3,8 +3,10 @@ import { authenticateToken, AuthRequest, requireModerator } from '../middleware/
 import { query, queryOne } from '../lib/db';
 import { DeliveryStatus, VehicleType } from '../types';
 import { getOpsMetricValue, getOpsMetricsForDays } from '../utils/ops-metrics';
+import { DashboardFinancialService } from '../services/dashboard-financial.service';
 
 const router = Router();
+const dashboardFinancialService = new DashboardFinancialService();
 
 router.get('/delivery-sla', authenticateToken, requireModerator, async (req: AuthRequest, res: Response) => {
   try {
@@ -60,6 +62,17 @@ router.get('/delivery-sla', authenticateToken, requireModerator, async (req: Aut
     });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+/** Relatório financeiro: cobranças entrega, carteira, repasses e assinaturas. */
+router.get('/financial', authenticateToken, requireModerator, async (req: AuthRequest, res: Response) => {
+  try {
+    const days = Number(req.query.days ?? 30);
+    const report = await dashboardFinancialService.getReport(days);
+    res.json(report);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Erro ao carregar financeiro' });
   }
 });
 

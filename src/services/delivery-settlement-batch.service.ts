@@ -30,6 +30,22 @@ function parseFrequency(raw: string | null | undefined, fallback: SettlementFreq
   return fallback;
 }
 
+function settlementBatchFeesWaived(): boolean {
+  return String(process.env.GIRO_SETTLEMENT_WAIVE_BATCH_FEES ?? '').toLowerCase() === 'true';
+}
+
+/** Taxa do lote nunca pode ser maior que o bruto (evita líquido zero em piloto com poucos pedidos). */
+function applyBatchSettlementFee(gross: number, feeFlat: number): {
+  feeApplied: number;
+  netPayable: number;
+} {
+  const feeApplied = settlementBatchFeesWaived()
+    ? 0
+    : roundMoney(Math.min(feeFlat, gross));
+  const netPayable = roundMoney(Math.max(0, gross - feeApplied));
+  return { feeApplied, netPayable };
+}
+
 export interface ComposeBatchesOpts {
   /** ISO opcional — só agrupa linhas com `DeliverySettlementLedger.createdAt` <= esse instante */
   cutoffAt?: string;
@@ -117,7 +133,7 @@ export class DeliverySettlementBatchService {
         } | undefined;
         const freq = parseFrequency(pr?.delivery_settlement_frequency, 'weekly');
         const feeFlat = this.resolvePartnerFee(freq, pr?.delivery_settlement_fee_flat_override ?? null);
-        const netPayable = roundMoney(Math.max(0, gross - feeFlat));
+        const { feeApplied, netPayable } = applyBatchSettlementFee(gross, feeFlat);
         const batchId = generateId();
         const batchStatus =
           netPayable < 0.01 ? ('no_transfer' as const) : ('pending_transfer' as const);
@@ -136,7 +152,7 @@ export class DeliverySettlementBatchService {
             batchId,
             row.sid,
             gross,
-            feeFlat,
+            feeApplied,
             netPayable,
             row.ledger_ids.length,
             freq,
@@ -198,7 +214,7 @@ export class DeliverySettlementBatchService {
           riderFallback
         );
         const feeFlat = this.resolvePartnerFee(freq, ur?.delivery_settlement_fee_flat_override ?? null);
-        const netPayable = roundMoney(Math.max(0, gross - feeFlat));
+        const { feeApplied, netPayable } = applyBatchSettlementFee(gross, feeFlat);
         const batchId = generateId();
         const batchStatus =
           netPayable < 0.01 ? ('no_transfer' as const) : ('pending_transfer' as const);
@@ -217,7 +233,7 @@ export class DeliverySettlementBatchService {
             batchId,
             row.rid,
             gross,
-            feeFlat,
+            feeApplied,
             netPayable,
             row.ledger_ids.length,
             freq,
