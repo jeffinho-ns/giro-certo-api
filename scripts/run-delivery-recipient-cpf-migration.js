@@ -1,0 +1,40 @@
+/**
+ * Coluna DeliveryOrder.recipientCpf (CPF pagador Asaas).
+ */
+const { Pool } = require('pg');
+const fs = require('fs');
+const path = require('path');
+require('dotenv').config();
+
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  console.error('DATABASE_URL não definida.');
+  process.exit(1);
+}
+
+const useSsl =
+  process.env.PGSSL === 'true' ||
+  DATABASE_URL.includes('render.com') ||
+  DATABASE_URL.includes('dpg-');
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: useSsl ? { rejectUnauthorized: false } : false,
+});
+
+async function run() {
+  const client = await pool.connect();
+  try {
+    const sqlPath = path.join(__dirname, 'migrate-delivery-recipient-cpf.sql');
+    await client.query(fs.readFileSync(sqlPath, 'utf8'));
+    console.log('✅ Migração delivery-recipient-cpf aplicada.');
+  } catch (e) {
+    console.error('❌ Falha:', e.message);
+    process.exitCode = 1;
+  } finally {
+    client.release();
+    await pool.end();
+  }
+}
+
+run();

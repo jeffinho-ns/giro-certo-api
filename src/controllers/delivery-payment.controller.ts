@@ -22,11 +22,17 @@ export class DeliveryPaymentController {
               return undefined;
             })();
 
+      const recipientCpf =
+        typeof req.body?.recipientCpf === 'string'
+          ? req.body.recipientCpf
+          : undefined;
+
       const { row, pixQr } = await service.initiateCheckout({
         orderId,
         actorUser: req.user,
         billingType,
         idempotencyKey,
+        recipientCpf,
       });
 
       const payment: Record<string, unknown> = {

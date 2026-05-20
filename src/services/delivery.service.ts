@@ -54,9 +54,9 @@ export class DeliveryService {
       `INSERT INTO "DeliveryOrder" (
         id, "storeId", "storeName", "storeAddress", "storeLatitude", "storeLongitude",
         "deliveryAddress", "deliveryLatitude", "deliveryLongitude",
-        "recipientName", "recipientPhone", notes, value, "deliveryFee",
+        "recipientName", "recipientPhone", "recipientCpf", notes, value, "deliveryFee",
         "appCommission", status, priority, "createdAt"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())`,
       [
         orderId,
         data.storeId,
@@ -69,6 +69,7 @@ export class DeliveryService {
         data.deliveryLongitude,
         data.recipientName || null,
         data.recipientPhone || null,
+        data.recipientCpf?.replace(/\D/g, '').slice(0, 14) || null,
         data.notes || null,
         data.value,
         quote.deliveryFee,

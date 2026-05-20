@@ -170,6 +170,8 @@ export interface CreateDeliveryOrderDto {
   deliveryLongitude: number;
   recipientName?: string;
   recipientPhone?: string;
+  /** CPF/CNPJ do pagador (somente dígitos) — exigido pelo Asaas na cobrança. */
+  recipientCpf?: string;
   notes?: string;
   value: number;
   deliveryFee: number;
@@ -369,6 +371,7 @@ export interface DeliveryOrder {
   deliveryLongitude: number;
   recipientName: string | null;
   recipientPhone: string | null;
+  recipientCpf: string | null;
   notes: string | null;
   value: number;
   deliveryFee: number;

@@ -11,6 +11,7 @@ import {
   AsaasBillingType,
 } from './asaas.service';
 import { DeliverySettlementLedgerService } from './delivery-settlement-ledger.service';
+import { normalizeCpfCnpjDigits, resolvePayerCpfCnpj } from '../utils/cpf-cnpj';
 
 export type DeliveryPaymentCollectionMode =
   | 'prepaid'
@@ -304,6 +305,8 @@ export class DeliveryPaymentService {
     actorUser: { partnerId?: string | null; role?: UserRole | string };
     billingType?: AsaasBillingType;
     idempotencyKey?: string;
+    /** CPF/CNPJ do pagador quando o pedido ainda não tem recipientCpf. */
+    recipientCpf?: string;
   }): Promise<InitiateCheckoutResult> {
     if (!isAsaasConfigured()) {
       throw new Error(
@@ -402,12 +405,23 @@ export class DeliveryPaymentService {
       );
     }
 
-    const cpfFallback = process.env.ASAAS_FALLBACK_PAYER_CPF?.replace(/\D/g, '');
+    const payerCpf = resolvePayerCpfCnpj(order.recipientCpf, params.recipientCpf);
+    const overrideDigits = normalizeCpfCnpjDigits(params.recipientCpf);
+    if (!normalizeCpfCnpjDigits(order.recipientCpf) && overrideDigits) {
+      await execute(
+        `UPDATE "DeliveryOrder"
+         SET "recipientCpf" = $1
+         WHERE id = $2
+           AND ("recipientCpf" IS NULL OR TRIM("recipientCpf") = '')`,
+        [overrideDigits, order.id]
+      );
+    }
+
     const customerBody = {
       name: (order.recipientName ?? 'Cliente').trim().slice(0, 80),
       email: payerEmailFromPhone(phoneDigits, order.id),
       mobilePhone: phoneDigits.startsWith('55') ? phoneDigits : `55${phoneDigits}`,
-      ...(cpfFallback && cpfFallback.length >= 11 ? { cpfCnpj: cpfFallback } : {}),
+      cpfCnpj: payerCpf,
     };
 
     const customer = await asaasCreateCustomer(customerBody);
