@@ -101,78 +101,7 @@ export class DeliverySettlementBatchService {
       const cutoffFrag = cutoffTs ? `AND l."createdAt" <= $1::timestamptz` : '';
       const cutoffParams: unknown[] = cutoffTs ? [cutoffTs.toISOString()] : [];
 
-      const storeAgg = await client.query(
-        `SELECT 
-          l."storeId" AS sid,
-          SUM(l."storeNetAmount")::text AS gross,
-          array_agg(l.id ORDER BY l."createdAt") AS ledger_ids
-         FROM "DeliverySettlementLedger" l
-         WHERE l.settlement_status = 'pending'
-           AND l.settlement_batch_id IS NULL
-           ${cutoffFrag}
-         GROUP BY l."storeId"`,
-        cutoffParams
-      );
-
-      for (const row of storeAgg.rows as Array<{
-        sid: string;
-        gross: string;
-        ledger_ids: string[];
-      }>) {
-        const gross = roundMoney(Number.parseFloat(row.gross) || 0);
-        if (gross < 0.01 || !row.ledger_ids?.length) continue;
-
-        const partnerRow = await client.query(
-          `SELECT delivery_settlement_frequency, delivery_settlement_fee_flat_override
-           FROM "Partner" WHERE id = $1`,
-          [row.sid]
-        );
-        const pr = partnerRow.rows[0] as {
-          delivery_settlement_frequency: string | null;
-          delivery_settlement_fee_flat_override: number | null;
-        } | undefined;
-        const freq = parseFrequency(pr?.delivery_settlement_frequency, 'weekly');
-        const feeFlat = this.resolvePartnerFee(freq, pr?.delivery_settlement_fee_flat_override ?? null);
-        const { feeApplied, netPayable } = applyBatchSettlementFee(gross, feeFlat);
-        const batchId = generateId();
-        const batchStatus =
-          netPayable < 0.01 ? ('no_transfer' as const) : ('pending_transfer' as const);
-
-        await client.query(
-          `INSERT INTO "DeliverySettlementBatch" (
-            id, beneficiary_type, partner_id, rider_user_id,
-            gross_amount, settlement_fee_flat, net_payable, line_count,
-            currency, settlement_frequency, status, external_reference, "createdAt", "updatedAt"
-          ) VALUES (
-            $1, 'partner', $2, NULL,
-            $3, $4, $5, $6,
-            'BRL', $7, $8, $1, NOW(), NOW()
-          )`,
-          [
-            batchId,
-            row.sid,
-            gross,
-            feeApplied,
-            netPayable,
-            row.ledger_ids.length,
-            freq,
-            batchStatus,
-          ]
-        );
-
-        await client.query(
-          `UPDATE "DeliverySettlementLedger"
-           SET settlement_batch_id = $2,
-               settlement_status = 'batched',
-               "updatedAt" = NOW()
-           WHERE id = ANY($1::text[])`,
-          [row.ledger_ids, batchId]
-        );
-
-        batches.push(batchId);
-        partnerBatches += 1;
-      }
-
+      /** Rider primeiro: a linha do livro tem loja + moto; um único settlement_batch_id bloqueava o repasse do rider. */
       const riderAgg = await client.query(
         `SELECT 
           l."riderUserId" AS rid,
@@ -180,8 +109,9 @@ export class DeliverySettlementBatchService {
           array_agg(l.id ORDER BY l."createdAt") AS ledger_ids
          FROM "DeliverySettlementLedger" l
          WHERE l.settlement_status = 'pending'
-           AND l.settlement_batch_id IS NULL
+           AND l.rider_settlement_batch_id IS NULL
            AND l."riderUserId" IS NOT NULL
+           AND l."riderNetAmount" >= 0.01
            ${cutoffFrag}
          GROUP BY l."riderUserId"`,
         cutoffParams
@@ -243,8 +173,8 @@ export class DeliverySettlementBatchService {
 
         await client.query(
           `UPDATE "DeliverySettlementLedger"
-           SET settlement_batch_id = $2,
-               settlement_status = 'batched',
+           SET rider_settlement_batch_id = $2,
+               settlement_batch_id = COALESCE(settlement_batch_id, $2),
                "updatedAt" = NOW()
            WHERE id = ANY($1::text[])`,
           [row.ledger_ids, batchId]
@@ -252,6 +182,79 @@ export class DeliverySettlementBatchService {
 
         batches.push(batchId);
         riderBatches += 1;
+      }
+
+      const storeAgg = await client.query(
+        `SELECT 
+          l."storeId" AS sid,
+          SUM(l."storeNetAmount")::text AS gross,
+          array_agg(l.id ORDER BY l."createdAt") AS ledger_ids
+         FROM "DeliverySettlementLedger" l
+         WHERE l.settlement_status = 'pending'
+           AND l.partner_settlement_batch_id IS NULL
+           ${cutoffFrag}
+         GROUP BY l."storeId"`,
+        cutoffParams
+      );
+
+      for (const row of storeAgg.rows as Array<{
+        sid: string;
+        gross: string;
+        ledger_ids: string[];
+      }>) {
+        const gross = roundMoney(Number.parseFloat(row.gross) || 0);
+        if (gross < 0.01 || !row.ledger_ids?.length) continue;
+
+        const partnerRow = await client.query(
+          `SELECT delivery_settlement_frequency, delivery_settlement_fee_flat_override
+           FROM "Partner" WHERE id = $1`,
+          [row.sid]
+        );
+        const pr = partnerRow.rows[0] as {
+          delivery_settlement_frequency: string | null;
+          delivery_settlement_fee_flat_override: number | null;
+        } | undefined;
+        const freq = parseFrequency(pr?.delivery_settlement_frequency, 'weekly');
+        const feeFlat = this.resolvePartnerFee(freq, pr?.delivery_settlement_fee_flat_override ?? null);
+        const { feeApplied, netPayable } = applyBatchSettlementFee(gross, feeFlat);
+        const batchId = generateId();
+        const batchStatus =
+          netPayable < 0.01 ? ('no_transfer' as const) : ('pending_transfer' as const);
+
+        await client.query(
+          `INSERT INTO "DeliverySettlementBatch" (
+            id, beneficiary_type, partner_id, rider_user_id,
+            gross_amount, settlement_fee_flat, net_payable, line_count,
+            currency, settlement_frequency, status, external_reference, "createdAt", "updatedAt"
+          ) VALUES (
+            $1, 'partner', $2, NULL,
+            $3, $4, $5, $6,
+            'BRL', $7, $8, $1, NOW(), NOW()
+          )`,
+          [
+            batchId,
+            row.sid,
+            gross,
+            feeApplied,
+            netPayable,
+            row.ledger_ids.length,
+            freq,
+            batchStatus,
+          ]
+        );
+
+        await client.query(
+          `UPDATE "DeliverySettlementLedger"
+           SET partner_settlement_batch_id = $2,
+               settlement_batch_id = $2,
+               settlement_status = 'batched',
+               "updatedAt" = NOW()
+           WHERE id = ANY($1::text[])`,
+          [row.ledger_ids, batchId]
+        );
+
+        batches.push(batchId);
+        partnerBatches += 1;
       }
 
       return { batches, partnerBatches, riderBatches };
@@ -398,13 +401,39 @@ export class DeliverySettlementBatchService {
         ]
       );
 
-      await client.query(
-        `UPDATE "DeliverySettlementLedger"
-         SET settlement_status = 'settled',
-             "updatedAt" = NOW()
-         WHERE settlement_batch_id = $1`,
-        [b.id]
-      );
+      if (b.beneficiary_type === 'partner') {
+        await client.query(
+          `UPDATE "DeliverySettlementLedger"
+           SET "updatedAt" = NOW()
+           WHERE partner_settlement_batch_id = $1`,
+          [b.id]
+        );
+        await client.query(
+          `UPDATE "DeliverySettlementLedger"
+           SET settlement_status = 'settled',
+               "updatedAt" = NOW()
+           WHERE partner_settlement_batch_id = $1
+             AND (
+               "riderNetAmount" < 0.01
+               OR "riderUserId" IS NULL
+               OR rider_settlement_batch_id IS NULL
+               OR EXISTS (
+                 SELECT 1 FROM "DeliverySettlementBatch" rb
+                 WHERE rb.id = "DeliverySettlementLedger".rider_settlement_batch_id
+                   AND rb.status = 'transfer_done'
+               )
+             )`,
+          [b.id]
+        );
+      } else {
+        await client.query(
+          `UPDATE "DeliverySettlementLedger"
+           SET settlement_status = 'settled',
+               "updatedAt" = NOW()
+           WHERE rider_settlement_batch_id = $1`,
+          [b.id]
+        );
+      }
 
       return { asaasTransferId: tid };
     });

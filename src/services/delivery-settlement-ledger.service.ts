@@ -115,7 +115,7 @@ export class DeliverySettlementLedgerService {
        FROM "DeliverySettlementLedger" l
        INNER JOIN "Partner" p ON p.id = l."storeId"
        WHERE l.settlement_status = 'pending'
-         AND l.settlement_batch_id IS NULL
+         AND l.partner_settlement_batch_id IS NULL
        GROUP BY l."storeId", p.name
        ORDER BY SUM(l."storeNetAmount") DESC`
     );
@@ -134,8 +134,9 @@ export class DeliverySettlementLedgerService {
        FROM "DeliverySettlementLedger" l
        LEFT JOIN "User" u ON u.id = l."riderUserId"
        WHERE l.settlement_status = 'pending'
-         AND l.settlement_batch_id IS NULL
+         AND l.rider_settlement_batch_id IS NULL
          AND l."riderUserId" IS NOT NULL
+         AND l."riderNetAmount" >= 0.01
        GROUP BY l."riderUserId", u.name
        ORDER BY SUM(l."riderNetAmount") DESC`
     );
@@ -145,7 +146,7 @@ export class DeliverySettlementLedgerService {
        FROM "DeliverySettlementLedger"
        WHERE settlement_status = 'pending'
          AND "riderUserId" IS NULL
-         AND settlement_batch_id IS NULL`
+         AND rider_settlement_batch_id IS NULL`
     );
 
     return {
