@@ -1,6 +1,7 @@
 export interface WhatsAppParsedOrder {
   recipientName: string;
   recipientPhone: string;
+  recipientCpf: string | null;
   fullAddress: string;
   /** Valor do pedido (itens), em reais — vem da linha "Valor do item:" ou equivalente. */
   itemValue: number;
@@ -17,6 +18,7 @@ const FIELD_PATTERNS = {
   valorItem:
     /^\s*(?:Valor(?:\s+do\s+(?:item|pedido))?|Pre[cç]o|Price)\s*:\s*(.+)$/im,
   confirmation: /^\s*Confirma[cç][aã]o\s*:\s*(.+)$/im,
+  cpf: /^\s*CPF\s*:\s*(.+)$/im,
 } as const;
 
 function normalizeWhitespace(value: string): string {
@@ -80,6 +82,7 @@ export class WhatsAppParser {
     const addressMatch = text.match(FIELD_PATTERNS.address);
     const valorMatch = text.match(FIELD_PATTERNS.valorItem);
     const confirmationMatch = text.match(FIELD_PATTERNS.confirmation);
+    const cpfMatch = text.match(FIELD_PATTERNS.cpf);
 
     if (!nameMatch?.[1]) {
       throw new Error('Campo obrigatorio ausente: Nome.');
@@ -105,9 +108,18 @@ export class WhatsAppParser {
       itemValue = parseMoneyBr(valorMatch[1]);
     }
 
+    let recipientCpf: string | null = null;
+    if (cpfMatch?.[1]) {
+      const digits = cpfMatch[1].replace(/\D/g, '');
+      if (digits.length === 11 || digits.length === 14) {
+        recipientCpf = digits;
+      }
+    }
+
     return {
       recipientName,
       recipientPhone,
+      recipientCpf,
       fullAddress,
       itemValue,
       confirmationRaw,

@@ -159,6 +159,7 @@ export class DeliveryService {
       deliveryLongitude: geocoded.longitude,
       recipientName: parsed.recipientName,
       recipientPhone: parsed.recipientPhone,
+      recipientCpf: parsed.recipientCpf ?? undefined,
       notes: `Pedido via WhatsApp. ${valueNote}`,
       value: resolvedItemValue,
       deliveryFee: 0,

@@ -11,6 +11,8 @@ import {
 } from '../types';
 import { DeliveryPaymentService } from '../services/delivery-payment.service';
 import { assertPayoutProfileShape } from '../lib/payout-bank-account';
+import { WHATSAPP_ORDER_TEMPLATE_PT } from '../constants/whatsapp-order-template';
+import { isWhatsAppCloudConfigured } from '../services/whatsapp-cloud.service';
 
 const router = Router();
 const partnerService = new PartnerService();
@@ -62,6 +64,27 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
     res.status(400).json({ error: error.message });
   }
 });
+
+/** Modelo de mensagem para o lojista enviar ao cliente no WhatsApp. */
+router.get(
+  '/me/whatsapp-order-template',
+  authenticateToken,
+  async (req: AuthRequest, res: Response) => {
+    const apiPublic =
+      process.env.API_PUBLIC_URL?.trim() ||
+      'https://giro-certo-api.onrender.com';
+    res.json({
+      template: WHATSAPP_ORDER_TEMPLATE_PT,
+      webhookUrl: `${apiPublic}/api/webhooks/whatsapp`,
+      cloudConfigured: isWhatsAppCloudConfigured(),
+      instructions: [
+        '1. Configure WhatsApp Cloud API no Meta e aponte o webhook para webhookUrl.',
+        '2. Cadastre o phone_number_id da loja (admin) e ative whatsapp_orders_enabled.',
+        '3. No WhatsApp, envie o template ao cliente; quando ele responder no formato, o sistema cria o pedido e manda o link de pagamento.',
+      ],
+    });
+  }
+);
 
 router.patch(
   '/me/delivery-payment-collection-mode',
@@ -284,6 +307,62 @@ router.get('/:partnerId/feed', authenticateToken, async (req: AuthRequest, res: 
     res.status(400).json({ error: error.message });
   }
 });
+
+/** Admin: vincula phone_number_id do Meta e ativa captura automática de pedidos. */
+router.patch(
+  '/:partnerId/whatsapp-settings',
+  authenticateToken,
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const partnerId = Array.isArray(req.params.partnerId)
+        ? req.params.partnerId[0]
+        : req.params.partnerId;
+      const { phone_number_id, enabled } = (req.body || {}) as {
+        phone_number_id?: string | null;
+        enabled?: boolean;
+      };
+
+      const sets: string[] = ['"updatedAt" = NOW()'];
+      const params: unknown[] = [];
+      let idx = 1;
+
+      if (phone_number_id !== undefined) {
+        sets.push(`whatsapp_phone_number_id = $${idx++}`);
+        params.push(
+          phone_number_id === null || phone_number_id === ''
+            ? null
+            : String(phone_number_id).trim()
+        );
+      }
+      if (enabled !== undefined) {
+        sets.push(`whatsapp_orders_enabled = $${idx++}`);
+        params.push(Boolean(enabled));
+      }
+
+      if (params.length === 0) {
+        return res.status(400).json({ error: 'Informe phone_number_id e/ou enabled' });
+      }
+
+      params.push(partnerId);
+      await execute(
+        `UPDATE "Partner" SET ${sets.join(', ')} WHERE id = $${idx}`,
+        params
+      );
+
+      const row = await queryOne<{
+        whatsapp_phone_number_id: string | null;
+        whatsapp_orders_enabled: boolean;
+      }>(
+        `SELECT whatsapp_phone_number_id, whatsapp_orders_enabled FROM "Partner" WHERE id = $1`,
+        [partnerId]
+      );
+      res.json({ ok: true, ...row });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
 
 // Buscar parceiro por ID
 router.get('/:partnerId', authenticateToken, async (req: Request, res: Response) => {
