@@ -208,12 +208,12 @@ router.get('/orders', authenticateToken, requireModerator, async (req: AuthReque
         .map((s) => s.trim())
         .filter(Boolean);
       if (parts.length > 0) {
-        whereClause += ` AND "do".status = ANY($${paramIndex}::text[])`;
+        whereClause += ` AND "do".status::text = ANY($${paramIndex}::text[])`;
         params.push(parts);
         paramIndex++;
       }
     } else if (status) {
-      whereClause += ` AND "do".status = $${paramIndex}`;
+      whereClause += ` AND "do".status::text = $${paramIndex}`;
       params.push(status);
       paramIndex++;
     }
