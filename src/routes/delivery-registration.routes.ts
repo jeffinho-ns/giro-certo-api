@@ -72,16 +72,41 @@ router.get(
   }
 );
 
-// Listar registros do usuário autenticado
+// Listar registros do usuário autenticado (metadados, sem fotos — app mobile)
+router.get(
+  '/user/mine/summary',
+  authenticateToken,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.userId) {
+        return res.status(401).json({ error: 'Usuário não autenticado' });
+      }
+
+      const registrations =
+        await registrationService.getRegistrationSummariesByUserId(req.userId);
+
+      res.json({ registrations });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+// Listar registros do usuário autenticado (com imagens — admin / revisão)
 router.get('/user/mine', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     if (!req.userId) {
       return res.status(401).json({ error: 'Usuário não autenticado' });
     }
 
-    const registrations = await registrationService.getRegistrationsByUserId(
-      req.userId
-    );
+    const lite =
+      req.query.lite === '1' ||
+      req.query.lite === 'true' ||
+      req.query.summary === '1';
+
+    const registrations = lite
+      ? await registrationService.getRegistrationSummariesByUserId(req.userId)
+      : await registrationService.getRegistrationsByUserId(req.userId);
 
     res.json({ registrations });
   } catch (error: any) {

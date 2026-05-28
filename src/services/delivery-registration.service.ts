@@ -135,6 +135,24 @@ export class DeliveryRegistrationService {
   }
 
   /**
+   * Metadados do cadastro (sem imagens BYTEA) — uso no app mobile.
+   */
+  async getRegistrationSummariesByUserId(userId: string) {
+    const registrations = await query<any>(
+      `SELECT id, "userId", status, "vehicleType", "plateLicense",
+              "currentKilometers", "lastOilChangeDate", "lastOilChangeKm",
+              "emergencyPhone", equipments, "consentImages",
+              "approvedAt", "rejectedAt", "rejectionReason", "adminNotes",
+              "createdAt", "updatedAt"
+       FROM "DeliveryRegistration"
+       WHERE "userId" = $1
+       ORDER BY "createdAt" DESC`,
+      [userId]
+    );
+    return registrations;
+  }
+
+  /**
    * Listar registros de um usuário
    */
   async getRegistrationsByUserId(userId: string) {
