@@ -179,6 +179,14 @@ router.put('/:registrationId/status', authenticateToken, requireAdmin, async (re
         `UPDATE "User" SET "hasVerifiedDocuments" = true, "updatedAt" = NOW() WHERE id = $1`,
         [registration.userId]
       );
+    } else if (data.status === 'REJECTED' && registration?.userId) {
+      await query(
+        `UPDATE "User" SET "hasVerifiedDocuments" = false, "updatedAt" = NOW() WHERE id = $1`,
+        [registration.userId]
+      );
+    }
+
+    if (data.status === 'APPROVED' && registration?.userId) {
       const alert = await alertService.createAlert({
         type: AlertType.DELIVERY_APPROVED,
         severity: AlertSeverity.MEDIUM,

@@ -142,7 +142,7 @@ export class DeliveryRegistrationService {
       `SELECT id, "userId", status, "vehicleType", "plateLicense",
               "currentKilometers", "lastOilChangeDate", "lastOilChangeKm",
               "emergencyPhone", equipments, "consentImages",
-              "approvedAt", "rejectedAt", "rejectionReason", "adminNotes",
+              "approvedAt", "rejectionReason", "adminNotes",
               "createdAt", "updatedAt"
        FROM "DeliveryRegistration"
        WHERE "userId" = $1
