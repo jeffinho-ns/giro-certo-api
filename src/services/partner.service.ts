@@ -20,13 +20,17 @@ export class PartnerService {
    */
   async createPartner(data: CreatePartnerDto) {
     const partnerId = generateId();
-    const DEFAULT_PASSWORD = '@123mudar';
+    const email = data.email?.trim();
 
     // Verificar se o email já existe (se fornecido)
-    if (data.email) {
+    if (email) {
+      if (!data.password || data.password.trim().length < 6) {
+        throw new Error('Senha é obrigatória e deve ter pelo menos 6 caracteres para criar login do lojista.');
+      }
+
       const existingUser = await queryOne<{ id: string }>(
         'SELECT id FROM "User" WHERE email = $1',
-        [data.email]
+        [email]
       );
 
       if (existingUser) {
@@ -53,7 +57,7 @@ export class PartnerService {
           data.latitude,
           data.longitude,
           data.phone || null,
-          data.email || null,
+          email || null,
           data.specialties || [],
           data.photoUrl || null,
           data.cnpj || null,
@@ -68,10 +72,10 @@ export class PartnerService {
       );
 
       // 2. Criar usuário associado (se email fornecido)
-      if (data.email) {
+      if (email) {
         const userId = generateId();
         const walletId = generateId();
-        const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+        const hashedPassword = await bcrypt.hash(data.password!.trim(), 10);
 
         // Criar usuário
         await client.query(
@@ -83,7 +87,7 @@ export class PartnerService {
           [
             userId,
             data.name, // Nome do lojista
-            data.email,
+            email,
             hashedPassword,
             25, // Idade padrão (pode ser ajustada)
             data.photoUrl || null,

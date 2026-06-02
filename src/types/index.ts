@@ -537,6 +537,8 @@ export interface CreatePartnerDto {
   longitude: number;
   phone?: string;
   email?: string;
+  /** Obrigatória quando email for informado para criar login do lojista. */
+  password?: string;
   specialties?: string[];
   photoUrl?: string;
   // Dados Empresariais
