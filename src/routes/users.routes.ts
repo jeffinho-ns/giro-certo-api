@@ -19,10 +19,12 @@ import { shouldEmitRiderLocationSocket } from '../utils/rider-socket-throttle';
 import { recordDeliveryTrackingIfDue } from '../utils/delivery-tracking-writer';
 import { recordDeliveryRouteHistoryPointIfActive } from '../utils/delivery-route-history-writer';
 import { maybeNotifyOrderEtaTwoMinutes } from '../utils/delivery-proximity-notifier';
+import { PartnerService } from '../services/partner.service';
 
 const router = Router();
 const imageService = new ImageService();
 const alertService = new AlertService();
+const partnerService = new PartnerService();
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -1148,8 +1150,8 @@ router.delete('/:userId', authenticateToken, requireAdmin, async (req: AuthReque
       return res.status(400).json({ error: 'Você não pode excluir sua própria conta de administrador' });
     }
 
-    const user = await queryOne<Pick<User, 'id' | 'name' | 'email' | 'role'>>(
-      `SELECT id, name, email, role
+    const user = await queryOne<Pick<User, 'id' | 'name' | 'email' | 'role' | 'partnerId'>>(
+      `SELECT id, name, email, role, "partnerId"
        FROM "User"
        WHERE id = $1`,
       [userId]
@@ -1157,6 +1159,14 @@ router.delete('/:userId', authenticateToken, requireAdmin, async (req: AuthReque
 
     if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    if (user.partnerId) {
+      await partnerService.deletePartner(user.partnerId, req.userId);
+      return res.json({
+        message: 'Usuário lojista e parceiro vinculados excluídos com sucesso',
+        user,
+      });
     }
 
     await transaction(async (client: any) => {

@@ -15,6 +15,125 @@ import { generateId } from '../utils/id';
 import bcrypt from 'bcryptjs';
 
 export class PartnerService {
+  private async assertPartnerCanBeDeleted(client: any, partnerId: string) {
+    const hasDeliveryOrders = await client.query(
+      `SELECT EXISTS (
+        SELECT 1 FROM "DeliveryOrder" WHERE "storeId" = $1
+      ) as exists`,
+      [partnerId]
+    );
+
+    if (hasDeliveryOrders.rows[0]?.exists) {
+      throw new Error(
+        'Não é possível excluir o parceiro porque já existem pedidos de entrega vinculados a ele.'
+      );
+    }
+
+    const settlementBatchesTable = await client.query(
+      `SELECT to_regclass('"delivery_settlement_batches"') as "tableName"`
+    );
+    if (settlementBatchesTable.rows[0]?.tableName) {
+      const hasSettlementBatches = await client.query(
+        `SELECT EXISTS (
+          SELECT 1 FROM "delivery_settlement_batches" WHERE partner_id = $1
+        ) as exists`,
+        [partnerId]
+      );
+      if (hasSettlementBatches.rows[0]?.exists) {
+        throw new Error(
+          'Não é possível excluir o parceiro porque já existem lotes de repasse vinculados.'
+        );
+      }
+    }
+
+    const settlementLedgerTable = await client.query(
+      `SELECT to_regclass('"delivery_settlement_ledger"') as "tableName"`
+    );
+    if (settlementLedgerTable.rows[0]?.tableName) {
+      const hasSettlementLedger = await client.query(
+        `SELECT EXISTS (
+          SELECT 1 FROM "delivery_settlement_ledger" WHERE "storeId" = $1
+        ) as exists`,
+        [partnerId]
+      );
+      if (hasSettlementLedger.rows[0]?.exists) {
+        throw new Error(
+          'Não é possível excluir o parceiro porque já existem lançamentos financeiros vinculados.'
+        );
+      }
+    }
+  }
+
+  /**
+   * Excluir parceiro e todos os usuários vinculados
+   */
+  async deletePartner(partnerId: string, protectedUserId?: string) {
+    const partner = await queryOne<Partner>(
+      'SELECT id, name, email, type, "createdAt", "updatedAt" FROM "Partner" WHERE id = $1',
+      [partnerId]
+    );
+
+    if (!partner) {
+      throw new Error('Parceiro não encontrado');
+    }
+
+    await transaction(async (client) => {
+      await this.assertPartnerCanBeDeleted(client, partnerId);
+
+      const linkedUsersResult = await client.query<{ id: string }>(
+        'SELECT id FROM "User" WHERE "partnerId" = $1',
+        [partnerId]
+      );
+      const linkedUserIds = linkedUsersResult.rows.map((row) => row.id);
+
+      if (protectedUserId && linkedUserIds.includes(protectedUserId)) {
+        throw new Error(
+          'Você não pode excluir um parceiro que contém o seu próprio usuário vinculado.'
+        );
+      }
+
+      if (linkedUserIds.length > 0) {
+        await client.query(
+          `UPDATE "DeliveryOrder"
+           SET "riderId" = NULL, "riderName" = NULL
+           WHERE "riderId" = ANY($1::text[])`,
+          [linkedUserIds]
+        );
+
+        const deliveryRegistrationTable = await client.query(
+          `SELECT to_regclass('"DeliveryRegistration"') as "tableName"`
+        );
+        if (deliveryRegistrationTable.rows[0]?.tableName) {
+          await client.query(
+            `DELETE FROM "DeliveryRegistration"
+             WHERE "userId" = ANY($1::text[])`,
+            [linkedUserIds]
+          );
+        }
+
+        await client.query(
+          `DELETE FROM "User"
+           WHERE "partnerId" = $1`,
+          [partnerId]
+        );
+      }
+
+      await client.query(
+        `DELETE FROM "PartnerPayment"
+         WHERE "partnerId" = $1`,
+        [partnerId]
+      );
+
+      await client.query(
+        `DELETE FROM "Partner"
+         WHERE id = $1`,
+        [partnerId]
+      );
+    });
+
+    return partner;
+  }
+
   /**
    * Criar um novo parceiro e usuário associado
    */

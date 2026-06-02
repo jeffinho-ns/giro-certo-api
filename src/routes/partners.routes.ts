@@ -431,6 +431,23 @@ router.put('/:partnerId/block', authenticateToken, requireAdmin, async (req: Req
   }
 });
 
+// Excluir parceiro e usuários vinculados (apenas admin)
+router.delete('/:partnerId', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const partnerId = Array.isArray(req.params.partnerId)
+      ? req.params.partnerId[0]
+      : req.params.partnerId;
+
+    const partner = await partnerService.deletePartner(partnerId, req.userId);
+    res.json({
+      message: 'Parceiro e usuários vinculados excluídos com sucesso',
+      partner,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // ============================================
 // ROTAS DE PAGAMENTO
 // ============================================
