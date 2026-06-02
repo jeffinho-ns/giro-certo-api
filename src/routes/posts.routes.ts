@@ -127,6 +127,77 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// Buscar post por ID (para deep link de notificações)
+router.get('/:postId', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const postId = Array.isArray(req.params.postId) ? req.params.postId[0] : req.params.postId;
+
+    const hasReactionsTable = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'PostReaction') as exists`
+    );
+
+    const params: (string | number)[] = [postId, req.userId ?? ''];
+    const userReactionSelect = hasReactionsTable?.exists
+      ? `, (SELECT pr."reactionType" FROM "PostReaction" pr WHERE pr."postId" = p.id AND pr."userId" = $2 LIMIT 1) as "userReactionPr",
+         (SELECT 1 FROM "PostLike" pl2 WHERE pl2."postId" = p.id AND pl2."userId" = $2 LIMIT 1) as "userLiked"`
+      : `, (SELECT 1 FROM "PostLike" pl2 WHERE pl2."postId" = p.id AND pl2."userId" = $2 LIMIT 1) as "userLiked"`;
+
+    const reactionsSubquery = hasReactionsTable?.exists
+      ? `, (SELECT json_object_agg(pr."reactionType", pr.cnt) FROM (
+          SELECT "reactionType", COUNT(*)::int as cnt FROM "PostReaction" WHERE "postId" = p.id GROUP BY "reactionType"
+        ) pr) as reactions`
+      : '';
+
+    const row = await queryOne<Post & { user: any; likes: any[]; comments: any[]; reactions?: any; userReactionPr?: string; userLiked?: number }>(
+      `SELECT 
+        p.id, p."userId", p.content, p.images, p."likesCount", p."commentsCount", p."createdAt", p."updatedAt",
+        COALESCE(p."postType", 'NORMAL') as "postType",
+        COALESCE(p."hashtags", '{}') as hashtags,
+        json_build_object('id', u.id, 'name', u.name, 'photoUrl', u."photoUrl", 'pilotProfile', u."pilotProfile") as user,
+        COALESCE(
+          json_agg(DISTINCT jsonb_build_object('userId', pl."userId")) 
+          FILTER (WHERE pl.id IS NOT NULL),
+          '[]'::json
+        ) as likes,
+        COALESCE(
+          json_agg(
+            jsonb_build_object(
+              'id', c.id,
+              'content', c.content,
+              'createdAt', c."createdAt",
+              'user', json_build_object('id', cu.id, 'name', cu.name, 'photoUrl', cu."photoUrl")
+            ) ORDER BY c."createdAt" DESC
+          ) FILTER (WHERE c.id IS NOT NULL),
+          '[]'::json
+        ) as comments
+        ${reactionsSubquery}
+        ${userReactionSelect}
+       FROM "Post" p
+       LEFT JOIN "User" u ON u.id = p."userId"
+       LEFT JOIN "PostLike" pl ON pl."postId" = p.id
+       LEFT JOIN "Comment" c ON c."postId" = p.id
+       LEFT JOIN "User" cu ON cu.id = c."userId"
+       WHERE p.id = $1
+       GROUP BY p.id, u.id`,
+      params
+    );
+
+    if (!row) {
+      return res.status(404).json({ error: 'Post não encontrado' });
+    }
+
+    const { userReactionPr, userLiked, ...rest } = row as any;
+    const post = {
+      ...rest,
+      userReaction: userReactionPr ?? (userLiked ? 'LIKE' : null),
+    };
+
+    res.json({ post });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Criar post
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {

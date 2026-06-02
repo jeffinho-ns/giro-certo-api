@@ -31,14 +31,14 @@ function isFirebaseConfigured(): boolean {
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB
+    fileSize: 50 * 1024 * 1024, // 50MB (suporta vídeos curtos de Momentos)
   },
   fileFilter: (req, file, cb) => {
-    // Aceitar apenas imagens
-    if (file.mimetype.startsWith('image/')) {
+    // Aceitar imagens e vídeos curtos (Momentos/Reels)
+    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
       cb(null, true);
     } else {
-      cb(new Error('Apenas arquivos de imagem são permitidos'));
+      cb(new Error('Apenas arquivos de imagem ou vídeo são permitidos'));
     }
   },
 });
