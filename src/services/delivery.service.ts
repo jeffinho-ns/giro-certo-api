@@ -801,6 +801,12 @@ export class DeliveryService {
       }
     }
 
+    const cancelledByStore =
+      nextStatus === DeliveryStatus.cancelled &&
+      !!order.riderId &&
+      !!actorUserId &&
+      actorUserId !== order.riderId;
+
     if (nextStatus === DeliveryStatus.cancelled) {
       updateQuery += ', "cancelledAt" = NOW()';
       await incrementOpsMetric('orders_cancelled_total', 1, currentStatus);
@@ -846,7 +852,19 @@ export class DeliveryService {
       }
     }
     if (updatedOrder) {
-      await this.notifyOrderStatusPush(updatedOrder);
+      await this.notifyOrderStatusPush(updatedOrder, {
+        cancelledByStore,
+      });
+      if (app && cancelledByStore && updatedOrder.riderId) {
+        ioEmitToRoom(app, `user:${updatedOrder.riderId}`, 'notification', {
+          type: 'delivery_cancelled_by_store',
+          title: 'Corrida cancelada pelo lojista',
+          body:
+            'A corrida foi cancelada pelo lojista. O valor ficará retido no sistema para análise financeira.',
+          orderId: updatedOrder.id,
+          financialPolicy: 'held_in_system',
+        });
+      }
     }
 
     if (updatedOrder && nextStatus === DeliveryStatus.completed && updatedOrder.inTransitAt) {
@@ -865,7 +883,10 @@ export class DeliveryService {
     return updatedOrder;
   }
 
-  private async notifyOrderStatusPush(order: DeliveryOrder): Promise<void> {
+  private async notifyOrderStatusPush(
+    order: DeliveryOrder,
+    options?: { cancelledByStore?: boolean }
+  ): Promise<void> {
     const storeUsers = await query<{ id: string }>(
       `SELECT id FROM "User" WHERE "partnerId" = $1`,
       [order.storeId]
@@ -918,6 +939,36 @@ export class DeliveryService {
       pending: 'pedido pendente',
     };
     const label = statusLabel[order.status] ?? order.status;
+    if (order.status === DeliveryStatus.cancelled && options?.cancelledByStore) {
+      for (const userId of storeUserIds) {
+        await sendPushToUser(
+          userId,
+          'Pedido cancelado',
+          'Cancelamento confirmado. O valor desta corrida ficará retido no sistema para análise financeira.',
+          {
+            type: 'delivery_status_changed',
+            orderId: order.id,
+            status: String(order.status),
+            financialPolicy: 'held_in_system',
+          }
+        );
+      }
+      if (order.riderId) {
+        await sendPushToUser(
+          order.riderId,
+          'Corrida cancelada pelo lojista',
+          'A corrida foi cancelada pelo lojista. O valor ficará retido no sistema para análise financeira.',
+          {
+            type: 'delivery_cancelled_by_store',
+            orderId: order.id,
+            status: String(order.status),
+            financialPolicy: 'held_in_system',
+          }
+        );
+      }
+      return;
+    }
+
     const recipients = new Set<string>(storeUserIds);
     if (order.riderId) recipients.add(order.riderId);
     for (const userId of recipients) {
