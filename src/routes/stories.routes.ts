@@ -118,6 +118,38 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// Buscar story por ID (deep link)
+router.get('/:storyId', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const storyId = getParam(req.params.storyId);
+    const row = await queryOne<Story & { userName: string; userPhotoUrl: string | null }>(
+      `SELECT s.*, u.name as "userName", u."photoUrl" as "userPhotoUrl"
+       FROM "Story" s
+       JOIN "User" u ON u.id = s."userId"
+       WHERE s.id = $1
+       LIMIT 1`,
+      [storyId]
+    );
+    if (!row) {
+      return res.status(404).json({ error: 'Story não encontrada' });
+    }
+    const story = {
+      id: row.id,
+      userId: row.userId,
+      userName: row.userName,
+      userAvatarUrl: row.userPhotoUrl,
+      mediaUrl: row.mediaUrl,
+      likeCount: row.likeCount ?? 0,
+      createdAt: row.createdAt,
+      caption: (row as any).caption ?? null,
+      template: (row as any).template ?? 'NORMAL',
+    };
+    return res.json({ story });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
 // Deletar story (apenas dono)
 router.delete('/:storyId', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {

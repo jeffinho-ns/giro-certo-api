@@ -22,6 +22,16 @@ import { maybeNotifyOrderEtaTwoMinutes } from '../utils/delivery-proximity-notif
 import { PartnerService } from '../services/partner.service';
 
 const router = Router();
+
+async function ensureUserSocialSettingsTable() {
+  await query(
+    `CREATE TABLE IF NOT EXISTS "UserSocialSettings" (
+      "userId" TEXT PRIMARY KEY REFERENCES "User"(id) ON DELETE CASCADE,
+      "garageVisibility" TEXT NOT NULL DEFAULT 'PUBLIC',
+      "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
+    )`
+  );
+}
 const imageService = new ImageService();
 const alertService = new AlertService();
 const partnerService = new PartnerService();
@@ -170,7 +180,20 @@ router.get('/:userId', authenticateToken, async (req: Request, res: Response) =>
             'id', b.id,
             'model', b.model,
             'brand', b.brand,
-            'plate', b.plate
+            'plate', b.plate,
+            'currentKm', b."currentKm",
+            'oilType', b."oilType",
+            'frontTirePressure', b."frontTirePressure",
+            'rearTirePressure', b."rearTirePressure",
+            'photoUrl', b."photoUrl",
+            'vehiclePhotoUrl', b."vehiclePhotoUrl",
+            'nickname', b.nickname,
+            'ridingStyle', b."ridingStyle",
+            'accessories', b.accessories,
+            'nextUpgrade', b."nextUpgrade",
+            'preferredColor', b."preferredColor",
+            'galleryUrls', b."galleryUrls",
+            'vehicleType', b."vehicleType"
           )) FILTER (WHERE b.id IS NOT NULL),
           '[]'::json
         ) as bikes,
@@ -218,12 +241,64 @@ router.get('/:userId', authenticateToken, async (req: Request, res: Response) =>
       followingCount = parseInt(flc?.count || '0', 10);
     }
 
+    let garageVisibility: 'PUBLIC' | 'PRIVATE' = 'PUBLIC';
+    try {
+      await ensureUserSocialSettingsTable();
+      const socialSettings = await queryOne<{ garageVisibility: string }>(
+        `SELECT "garageVisibility" FROM "UserSocialSettings" WHERE "userId" = $1`,
+        [userId]
+      );
+      const raw = (socialSettings?.garageVisibility || 'PUBLIC').toUpperCase();
+      garageVisibility = raw === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC';
+    } catch (_) {}
+
     const { password, ...userWithoutPassword } = user as any;
     res.json({
-      user: { ...userWithoutPassword, followersCount, followingCount },
+      user: { ...userWithoutPassword, followersCount, followingCount, garageVisibility },
     });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+router.get('/me/social-settings', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+    await ensureUserSocialSettingsTable();
+    const settings = await queryOne<{ garageVisibility: string }>(
+      `SELECT "garageVisibility" FROM "UserSocialSettings" WHERE "userId" = $1`,
+      [req.userId]
+    );
+    const raw = (settings?.garageVisibility || 'PUBLIC').toUpperCase();
+    const garageVisibility = raw === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC';
+    return res.json({ garageVisibility });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+router.patch('/me/social-settings', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+    const garageVisibilityRaw = ((req.body?.garageVisibility as string | undefined) ?? 'PUBLIC')
+      .toUpperCase()
+      .trim();
+    const garageVisibility = garageVisibilityRaw === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC';
+    await ensureUserSocialSettingsTable();
+    await query(
+      `INSERT INTO "UserSocialSettings" ("userId", "garageVisibility", "updatedAt")
+       VALUES ($1, $2, NOW())
+       ON CONFLICT ("userId")
+       DO UPDATE SET "garageVisibility" = EXCLUDED."garageVisibility", "updatedAt" = NOW()`,
+      [req.userId, garageVisibility]
+    );
+    return res.json({ garageVisibility });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
   }
 });
 
