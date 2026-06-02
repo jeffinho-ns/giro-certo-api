@@ -80,11 +80,13 @@ export class PartnerService {
     await transaction(async (client) => {
       await this.assertPartnerCanBeDeleted(client, partnerId);
 
-      const linkedUsersResult = await client.query<{ id: string }>(
+      const linkedUsersResult = await client.query(
         'SELECT id FROM "User" WHERE "partnerId" = $1',
         [partnerId]
       );
-      const linkedUserIds = linkedUsersResult.rows.map((row) => row.id);
+      const linkedUserIds = (linkedUsersResult.rows as Array<{ id: string }>).map(
+        (row) => row.id
+      );
 
       if (protectedUserId && linkedUserIds.includes(protectedUserId)) {
         throw new Error(
