@@ -31,7 +31,8 @@ router.get('/me/bikes', authenticateToken, async (req: AuthRequest, res: Respons
        FROM "Bike" b
        LEFT JOIN "MaintenanceLog" ml ON ml."bikeId" = b.id
        WHERE b."userId" = $1
-       GROUP BY b.id`,
+       GROUP BY b.id
+       ORDER BY b."updatedAt" DESC, b."createdAt" DESC`,
       [req.userId]
     );
 
