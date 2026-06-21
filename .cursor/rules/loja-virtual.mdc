@@ -1,0 +1,24 @@
+---
+description: Iniciativa Loja Virtual (Giro Certo) - guia e alertas obrigatórios
+alwaysApply: true
+---
+
+# Loja Virtual (Giro Certo) — leia antes de agir
+
+**Leia `PLANO_LOJA_VIRTUAL.md` e `AGENTS.md` na raiz antes de qualquer tarefa.** São a fonte de verdade (arquitetura, modelo de dados, roadmap, segurança).
+
+## Sempre alerte o usuário (em português) antes de prosseguir quando:
+
+- For confiar no front como barreira de segurança → **segurança mora na API, não no front**.
+- For commitar/adicionar segredos ou lixo de build (`google-services.json`, `.env`, chaves Asaas/Firebase, `android/.gradle/`, `android/local.properties`). Bloqueie e avise.
+- For usar preço/valor vindo do cliente → **recalcule no servidor**.
+- Despachar entrega antes do pagamento confirmado pelo **webhook do Asaas**.
+- Expor em endpoint público dados sensíveis do `Partner` (CNPJ, conta bancária, e-mail, comissões) ou de motoboy → use **DTO reduzido**.
+- Quebrar o isolamento por loja (`partnerId`) ou deixar lojista acessar o `/dashboard` admin.
+
+## Padrões deste repo (giro-certo-api)
+
+- Sem ORM: PostgreSQL via `pg`. Entidade nova = migração `scripts/migrate-*.sql` idempotente + runner + tipo em `src/types/index.ts` + service/controller/route.
+- App real é Express + Socket.IO (ignore `fastify`/`ws` residuais).
+- Endpoints públicos novos exigem rate limiting e CORS restrito.
+- Só commitar/push quando o usuário pedir. Nunca `git add .` cego.
