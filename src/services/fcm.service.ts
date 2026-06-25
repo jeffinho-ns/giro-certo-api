@@ -54,7 +54,17 @@ export async function sendPushToUser(
       tokens,
       notification: { title, body },
       data: data || {},
-      android: { priority: 'high' },
+      android: {
+        priority: 'high',
+        // Canal de alta importância criado no app (toca som/vibra mesmo com a tela bloqueada).
+        notification: {
+          channelId: 'giro_certo_alerts',
+          sound: 'default',
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          notificationPriority: 'PRIORITY_MAX',
+        },
+      },
       apns: { payload: { aps: { sound: 'default' } } },
     };
     await messaging.sendEachForMulticast(message);
