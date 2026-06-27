@@ -1,9 +1,22 @@
 import { Router } from 'express';
 import { authenticateToken, requireLojista } from '../middleware/auth';
+import { rateLimit } from '../middleware/rate-limit';
 import { StoreManageController } from '../controllers/store-manage.controller';
+import { StorePublicController } from '../controllers/store-public.controller';
 
 const router = Router();
 const manage = new StoreManageController();
+const publicCtrl = new StorePublicController();
+
+// ============================================
+// /api/store/public/* — vitrine pública (SEM auth), com rate limiting
+// ============================================
+const readLimiter = rateLimit({ windowMs: 60_000, max: 120, keyPrefix: 'store-public-read' });
+const orderLimiter = rateLimit({ windowMs: 60_000, max: 10, keyPrefix: 'store-public-order' });
+
+router.get('/public/:slug', readLimiter, publicCtrl.getStorefront);
+router.post('/public/:slug/orders', orderLimiter, publicCtrl.createOrder);
+router.get('/public/orders/:token', readLimiter, publicCtrl.getOrderStatus);
 
 // ============================================
 // /api/store/manage/* — área do LOJISTA

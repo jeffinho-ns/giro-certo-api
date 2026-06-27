@@ -329,6 +329,8 @@ export interface MaintenanceLog {
 export interface Partner {
   id: string;
   name: string;
+  /** Identificador público na URL da vitrine (/loja/<slug>). */
+  slug?: string | null;
   type: PartnerType;
   address: string;
   latitude: number;
