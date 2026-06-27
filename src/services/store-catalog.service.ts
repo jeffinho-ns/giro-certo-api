@@ -582,6 +582,28 @@ export class StoreCatalogService {
   }
 
   // ============================================
+  // Avaliações recebidas (somente leitura para o lojista)
+  // ============================================
+
+  async listReviews(partnerId: string) {
+    const reviews = await query<any>(
+      `SELECT id, rating, comment, "customerName", "storeOrderId", "createdAt"
+       FROM "StoreReview" WHERE "partnerId" = $1 ORDER BY "createdAt" DESC LIMIT 100`,
+      [partnerId]
+    );
+    const agg = await queryOne<{ avg: string; count: string }>(
+      `SELECT COALESCE(AVG(rating), 0) AS avg, COUNT(*) AS count
+       FROM "StoreReview" WHERE "partnerId" = $1`,
+      [partnerId]
+    );
+    return {
+      average: Number(Number(agg?.avg ?? 0).toFixed(2)),
+      count: Number(agg?.count ?? 0),
+      reviews,
+    };
+  }
+
+  // ============================================
   // Personalização da vitrine (capa, cor, descrição, logo)
   // ============================================
 

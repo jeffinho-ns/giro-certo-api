@@ -18,6 +18,7 @@ router.get('/public/:slug', readLimiter, publicCtrl.getStorefront);
 router.post('/public/:slug/coupon/preview', readLimiter, publicCtrl.previewCoupon);
 router.post('/public/:slug/orders', orderLimiter, publicCtrl.createOrder);
 router.post('/public/orders/:token/checkout', orderLimiter, publicCtrl.checkout);
+router.post('/public/orders/:token/review', orderLimiter, publicCtrl.submitReview);
 router.get('/public/orders/:token', readLimiter, publicCtrl.getOrderStatus);
 
 // ============================================
@@ -55,6 +56,9 @@ router.get('/manage/banners', manage.listBanners);
 router.post('/manage/banners', manage.createBanner);
 router.put('/manage/banners/:id', manage.updateBanner);
 router.delete('/manage/banners/:id', manage.deleteBanner);
+
+// --- Avaliações recebidas ---
+router.get('/manage/reviews', manage.listReviews);
 
 // --- Cupons de desconto ---
 router.get('/manage/coupons', manage.listCoupons);

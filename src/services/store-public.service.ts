@@ -67,10 +67,18 @@ export interface PublicCatalogCategoryDto {
   products: PublicCatalogProductDto[];
 }
 
+export interface PublicReviewDto {
+  rating: number;
+  comment: string | null;
+  customerName: string | null;
+  createdAt: Date;
+}
+
 export interface PublicStorefrontDto {
   store: PublicStoreDto;
   banners: Array<{ id: string; imageUrl: string; title: string | null; linkUrl: string | null }>;
   categories: PublicCatalogCategoryDto[];
+  reviews: PublicReviewDto[];
 }
 
 export class StorePublicService {
@@ -188,7 +196,79 @@ export class StorePublicService {
       categoryDtos.push({ id: 'uncategorized', name: 'Outros', products: uncategorized });
     }
 
-    return { store, banners, categories: categoryDtos };
+    // Avaliações recentes (vitrine pública).
+    const reviews = await query<any>(
+      `SELECT rating, comment, "customerName", "createdAt"
+       FROM "StoreReview"
+       WHERE "partnerId" = $1 AND comment IS NOT NULL AND comment <> ''
+       ORDER BY "createdAt" DESC
+       LIMIT 5`,
+      [partner.id]
+    );
+
+    return {
+      store,
+      banners,
+      categories: categoryDtos,
+      reviews: reviews.map((r) => ({
+        rating: r.rating,
+        comment: r.comment,
+        customerName: r.customerName ?? null,
+        createdAt: r.createdAt,
+      })),
+    };
+  }
+
+  /**
+   * Registra a avaliação de um pedido (1 por pedido) e recalcula a média da loja.
+   * Identidade via trackingToken (cliente anônimo).
+   */
+  async submitReview(token: string, rating: number, comment?: string) {
+    const r = Math.round(Number(rating));
+    if (!Number.isFinite(r) || r < 1 || r > 5) {
+      throw new Error('Nota deve ser entre 1 e 5');
+    }
+
+    const order = await queryOne<any>(
+      `SELECT id, "partnerId", status, "customerName" FROM "StoreOrder" WHERE "trackingToken" = $1`,
+      [token]
+    );
+    if (!order) throw new Error('Pedido não encontrado');
+    if (order.status === StoreOrderStatus.cancelled || order.status === StoreOrderStatus.rejected) {
+      throw new Error('Pedido cancelado não pode ser avaliado');
+    }
+    if (order.status === StoreOrderStatus.awaiting_payment) {
+      throw new Error('Avalie após o pagamento ser confirmado');
+    }
+
+    const existing = await queryOne<{ id: string }>(
+      `SELECT id FROM "StoreReview" WHERE "storeOrderId" = $1`,
+      [order.id]
+    );
+    if (existing) throw new Error('Este pedido já foi avaliado');
+
+    const id = generateId();
+    const cleanComment = comment ? String(comment).trim().slice(0, 1000) : null;
+    await query(
+      `INSERT INTO "StoreReview" (id, "partnerId", "storeOrderId", rating, comment, "customerName")
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [id, order.partnerId, order.id, r, cleanComment, order.customerName ?? null]
+    );
+
+    // Recalcula a média e o total da loja a partir das avaliações.
+    const agg = await queryOne<{ avg: string; count: string }>(
+      `SELECT COALESCE(AVG(rating), 0) AS avg, COUNT(*) AS count
+       FROM "StoreReview" WHERE "partnerId" = $1`,
+      [order.partnerId]
+    );
+    const avg = Number(Number(agg?.avg ?? 0).toFixed(2));
+    const count = Number(agg?.count ?? 0);
+    await query(
+      `UPDATE "Partner" SET rating = $1, "reviewCount" = $2, "updatedAt" = NOW() WHERE id = $3`,
+      [avg, count, order.partnerId]
+    );
+
+    return { ok: true, rating: r, storeRating: avg, reviewCount: count };
   }
 
   // ============================================
@@ -466,6 +546,11 @@ export class StorePublicService {
       [order.id]
     );
 
+    const review = await queryOne<{ id: string }>(
+      `SELECT id FROM "StoreReview" WHERE "storeOrderId" = $1`,
+      [order.id]
+    );
+
     return {
       id: order.id,
       status: order.status,
@@ -486,6 +571,7 @@ export class StorePublicService {
         cancelledAt: order.cancelledAt,
       },
       hasDelivery: !!order.deliveryOrderId,
+      reviewed: !!review,
     };
   }
 }

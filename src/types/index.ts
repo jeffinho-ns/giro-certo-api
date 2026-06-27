@@ -906,6 +906,16 @@ export interface UpdateProductDto {
   sortOrder?: number;
 }
 
+export interface StoreReview {
+  id: string;
+  partnerId: string;
+  storeOrderId: string | null;
+  rating: number;
+  comment: string | null;
+  customerName: string | null;
+  createdAt: Date;
+}
+
 export type CouponDiscountType = 'percent' | 'fixed';
 
 export interface StoreCoupon {

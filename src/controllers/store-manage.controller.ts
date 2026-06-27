@@ -250,6 +250,17 @@ export class StoreManageController {
     }
   };
 
+  // --- Avaliações recebidas ---
+
+  listReviews = async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await catalogService.listReviews(this.partnerId(req));
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
   // --- Cupons ---
 
   listCoupons = async (req: AuthRequest, res: Response) => {
