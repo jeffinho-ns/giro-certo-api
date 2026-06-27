@@ -9,6 +9,7 @@ import {
   StoreOrderStatus,
 } from '../types';
 import { DeliveryPricingService } from './delivery-pricing.service';
+import { normalizeCpfCnpjDigits } from '../utils/cpf-cnpj';
 
 const pricingService = new DeliveryPricingService();
 
@@ -330,11 +331,11 @@ export class StorePublicService {
       await client.query(
         `INSERT INTO "StoreOrder" (
           id, "partnerId", "customerId",
-          "customerName", "customerPhone", "customerAddress",
+          "customerName", "customerPhone", "customerAddress", "customerCpf",
           "customerLatitude", "customerLongitude", notes,
           subtotal, "deliveryFee", total, currency,
           status, "trackingToken"
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
         [
           orderId,
           partner.id,
@@ -342,6 +343,7 @@ export class StorePublicService {
           name,
           phone,
           address,
+          normalizeCpfCnpjDigits(dto.customerCpf),
           dto.customerLatitude ?? null,
           dto.customerLongitude ?? null,
           dto.notes ? String(dto.notes) : null,

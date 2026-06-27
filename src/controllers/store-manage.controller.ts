@@ -1,8 +1,13 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { StoreCatalogService } from '../services/store-catalog.service';
+import { StoreOrderService } from '../services/store-order.service';
+import { DeliveryService } from '../services/delivery.service';
+import { StoreOrderStatus } from '../types';
 
 const catalogService = new StoreCatalogService();
+const orderService = new StoreOrderService();
+const deliveryService = new DeliveryService();
 
 /**
  * Controller da área do lojista (/api/store/manage/*).
@@ -238,6 +243,63 @@ export class StoreManageController {
     try {
       await catalogService.deleteBanner(this.partnerId(req), this.param(req, 'id'));
       res.json({ ok: true });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  // --- Pedidos (loja virtual) ---
+
+  listOrders = async (req: AuthRequest, res: Response) => {
+    try {
+      const status = req.query.status as StoreOrderStatus | undefined;
+      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+      const orders = await orderService.listOrders(this.partnerId(req), { status, limit });
+      res.json({ orders });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  getOrder = async (req: AuthRequest, res: Response) => {
+    try {
+      const order = await orderService.getOrder(this.partnerId(req), this.param(req, 'id'));
+      if (!order) return res.status(404).json({ error: 'Pedido não encontrado' });
+      res.json({ order });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  acceptOrder = async (req: AuthRequest, res: Response) => {
+    try {
+      const { storeOrder, deliveryOrder } = await orderService.acceptOrder(
+        this.partnerId(req),
+        this.param(req, 'id')
+      );
+      // Oferta em tempo real aos motoboys (mesmo fluxo do despacho atual).
+      try {
+        await deliveryService.announceOrderToRiders(deliveryOrder, req.app);
+      } catch (announceError: any) {
+        console.error('[store acceptOrder] falha ao notificar entregadores', {
+          deliveryOrderId: (deliveryOrder as any)?.id,
+          message: announceError?.message,
+        });
+      }
+      res.json({ order: storeOrder, deliveryOrderId: (deliveryOrder as any)?.id });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  rejectOrder = async (req: AuthRequest, res: Response) => {
+    try {
+      const order = await orderService.rejectOrder(
+        this.partnerId(req),
+        this.param(req, 'id'),
+        req.body?.reason
+      );
+      res.json({ order });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }

@@ -806,6 +806,7 @@ export interface StoreOrder {
   customerName: string;
   customerPhone: string;
   customerAddress: string;
+  customerCpf: string | null;
   customerLatitude: number | null;
   customerLongitude: number | null;
   notes: string | null;
@@ -819,6 +820,12 @@ export interface StoreOrder {
   paymentId: string | null;
   deliveryOrderId: string | null;
   trackingToken: string;
+  // Pagamento (Asaas)
+  asaasPaymentId: string | null;
+  asaasCustomerId: string | null;
+  invoiceUrl: string | null;
+  billingType: string | null;
+  lastWebhookEvent: string | null;
   createdAt: Date;
   updatedAt: Date;
   paidAt: Date | null;
@@ -932,6 +939,8 @@ export interface CreateStoreOrderDto {
   customerName: string;
   customerPhone: string;
   customerAddress: string;
+  /** CPF/CNPJ do pagador (somente dígitos ou formatado) — exigido pelo Asaas no checkout. */
+  customerCpf?: string;
   customerLatitude?: number;
   customerLongitude?: number;
   notes?: string;

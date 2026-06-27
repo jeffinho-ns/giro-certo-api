@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { DeliveryPaymentService } from '../services/delivery-payment.service';
+import { StorePaymentService } from '../services/store-payment.service';
 import { WhatsAppOrderIngestService } from '../services/whatsapp-order-ingest.service';
 import {
   extractInboundTextMessages,
@@ -8,6 +9,7 @@ import {
 
 const router = Router();
 const deliveryPaymentWebhookService = new DeliveryPaymentService();
+const storePaymentWebhookService = new StorePaymentService();
 const whatsappOrderIngest = new WhatsAppOrderIngestService();
 
 router.post('/asaas', async (req, res: Response) => {
@@ -22,9 +24,12 @@ router.post('/asaas', async (req, res: Response) => {
       console.warn('[asaas webhook] ASAAS_WEBHOOK_TOKEN não definido em produção');
     }
 
-    await deliveryPaymentWebhookService.handleWebhookPayload(
-      req.body as Record<string, unknown>
-    );
+    const body = req.body as Record<string, unknown>;
+    // Primeiro tenta como pagamento da loja virtual; se não for, trata como entrega.
+    const handledByStore = await storePaymentWebhookService.handleWebhookPayload(body);
+    if (!handledByStore) {
+      await deliveryPaymentWebhookService.handleWebhookPayload(body);
+    }
     res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[asaas webhook]', e?.message || e);

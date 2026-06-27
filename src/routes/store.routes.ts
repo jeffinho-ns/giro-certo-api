@@ -16,6 +16,7 @@ const orderLimiter = rateLimit({ windowMs: 60_000, max: 10, keyPrefix: 'store-pu
 
 router.get('/public/:slug', readLimiter, publicCtrl.getStorefront);
 router.post('/public/:slug/orders', orderLimiter, publicCtrl.createOrder);
+router.post('/public/orders/:token/checkout', orderLimiter, publicCtrl.checkout);
 router.get('/public/orders/:token', readLimiter, publicCtrl.getOrderStatus);
 
 // ============================================
@@ -53,5 +54,11 @@ router.get('/manage/banners', manage.listBanners);
 router.post('/manage/banners', manage.createBanner);
 router.put('/manage/banners/:id', manage.updateBanner);
 router.delete('/manage/banners/:id', manage.deleteBanner);
+
+// --- Pedidos da loja virtual (aceitar = ponte para entrega) ---
+router.get('/manage/orders', manage.listOrders);
+router.get('/manage/orders/:id', manage.getOrder);
+router.post('/manage/orders/:id/accept', manage.acceptOrder);
+router.post('/manage/orders/:id/reject', manage.rejectOrder);
 
 export default router;

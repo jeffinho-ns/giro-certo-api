@@ -25,7 +25,8 @@
     "db:migrate:delivery-settlement-split-batch-ids": "node scripts/run-delivery-settlement-split-batch-ids-migration.js",
     "db:migrate:partner-whatsapp": "node scripts/run-partner-whatsapp-migration.js",
     "db:migrate:loja-virtual": "node scripts/run-loja-virtual-migration.js",
-    "db:migrate:store-slug": "node scripts/run-store-slug-migration.js"
+    "db:migrate:store-slug": "node scripts/run-store-slug-migration.js",
+    "db:migrate:store-order-payment": "node scripts/run-store-order-payment-migration.js"
   },
   "keywords": [
     "api",

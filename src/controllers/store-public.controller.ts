@@ -1,7 +1,9 @@
 import { Request, Response } from 'express';
 import { StorePublicService } from '../services/store-public.service';
+import { StorePaymentService } from '../services/store-payment.service';
 
 const publicService = new StorePublicService();
+const paymentService = new StorePaymentService();
 
 /**
  * Controller público da loja virtual (/api/store/public/*). SEM autenticação.
@@ -31,6 +33,19 @@ export class StorePublicController {
       const slug = this.param(req, 'slug');
       const result = await publicService.createOrder(slug, req.body);
       res.status(201).json({ order: result });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  checkout = async (req: Request, res: Response) => {
+    try {
+      const token = this.param(req, 'token');
+      const result = await paymentService.initiateCheckout(token, {
+        cpf: req.body?.cpf,
+        billingType: req.body?.billingType,
+      });
+      res.json(result);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
