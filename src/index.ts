@@ -28,6 +28,7 @@ import communitiesRoutes from './routes/communities.routes';
 import mapsRoutes from './routes/maps.routes';
 import webhooksRoutes from './routes/webhooks.routes';
 import settlementRoutes from './routes/settlement.routes';
+import storeRoutes from './routes/store.routes';
 import { UserRole } from './types';
 import { DeliveryService } from './services/delivery.service';
 import {
@@ -104,6 +105,7 @@ app.use('/api/social', socialRoutes);
 app.use('/api/communities', communitiesRoutes);
 app.use('/api/maps', mapsRoutes);
 app.use('/api/settlement', settlementRoutes);
+app.use('/api/store', storeRoutes);
 
 // Error handler
 app.use(errorHandler);

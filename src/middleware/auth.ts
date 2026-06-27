@@ -85,4 +85,23 @@ export function requireModerator(
   next();
 }
 
+/**
+ * Exige que o usuário seja um LOJISTA (vinculado a uma loja via partnerId).
+ * É a fronteira de autorização das rotas /api/store/manage/* — todo acesso fica
+ * escopado à PRÓPRIA loja (req.user.partnerId). Use sempre após authenticateToken.
+ */
+export function requireLojista(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Não autenticado' });
+  }
+  if (!req.user.partnerId) {
+    return res.status(403).json({ error: 'Acesso restrito a lojistas (sem loja vinculada)' });
+  }
+  next();
+}
+
 
