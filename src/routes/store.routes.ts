@@ -55,6 +55,10 @@ router.post('/manage/banners', manage.createBanner);
 router.put('/manage/banners/:id', manage.updateBanner);
 router.delete('/manage/banners/:id', manage.deleteBanner);
 
+// --- Personalização da vitrine ---
+router.get('/manage/appearance', manage.getAppearance);
+router.put('/manage/appearance', manage.updateAppearance);
+
 // --- Pedidos da loja virtual (aceitar = ponte para entrega) ---
 router.get('/manage/orders', manage.listOrders);
 router.get('/manage/orders/:id', manage.getOrder);

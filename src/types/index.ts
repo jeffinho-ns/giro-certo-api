@@ -354,6 +354,10 @@ export interface Partner {
   operatingHours: any | null; // JSON: {"monday": {"open": "08:00", "close": "22:00"}, ...}
   // Status
   isBlocked: boolean; // Bloqueado se inadimplente
+  // Personalização da vitrine pública (loja virtual)
+  storeCoverUrl?: string | null; // Imagem de capa (hero) da vitrine
+  storeThemeColor?: string | null; // Cor de destaque (hex) da vitrine
+  storeDescription?: string | null; // Descrição curta exibida na vitrine
   createdAt: Date;
   updatedAt: Date;
   /** prepaid | postpaid_pix | authorize_capture — política de cobrança ao cliente (Asaas). */

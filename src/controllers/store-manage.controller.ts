@@ -248,6 +248,29 @@ export class StoreManageController {
     }
   };
 
+  // --- Personalização da vitrine ---
+
+  getAppearance = async (req: AuthRequest, res: Response) => {
+    try {
+      const appearance = await catalogService.getAppearance(this.partnerId(req));
+      res.json({ appearance });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  updateAppearance = async (req: AuthRequest, res: Response) => {
+    try {
+      const appearance = await catalogService.updateAppearance(
+        this.partnerId(req),
+        req.body
+      );
+      res.json({ appearance });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
   // --- Pedidos (loja virtual) ---
 
   listOrders = async (req: AuthRequest, res: Response) => {

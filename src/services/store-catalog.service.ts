@@ -580,4 +580,82 @@ export class StoreCatalogService {
     );
     if (affected === 0) throw new Error('Banner não encontrado');
   }
+
+  // ============================================
+  // Personalização da vitrine (capa, cor, descrição, logo)
+  // ============================================
+
+  async getAppearance(partnerId: string) {
+    const row = await queryOne<any>(
+      `SELECT id, name, "tradingName", "photoUrl", "storeCoverUrl",
+              "storeThemeColor", "storeDescription", slug
+       FROM "Partner" WHERE id = $1`,
+      [partnerId]
+    );
+    if (!row) throw new Error('Loja não encontrada');
+    return {
+      id: row.id,
+      name: row.name,
+      slug: row.slug ?? null,
+      tradingName: row.tradingName ?? null,
+      photoUrl: row.photoUrl ?? null,
+      coverUrl: row.storeCoverUrl ?? null,
+      themeColor: row.storeThemeColor ?? null,
+      description: row.storeDescription ?? null,
+    };
+  }
+
+  async updateAppearance(
+    partnerId: string,
+    dto: {
+      coverUrl?: string | null;
+      themeColor?: string | null;
+      description?: string | null;
+      photoUrl?: string | null;
+      tradingName?: string | null;
+    }
+  ) {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let idx = 1;
+
+    const map: Array<[string, string]> = [
+      ['coverUrl', '"storeCoverUrl"'],
+      ['themeColor', '"storeThemeColor"'],
+      ['description', '"storeDescription"'],
+      ['photoUrl', '"photoUrl"'],
+      ['tradingName', '"tradingName"'],
+    ];
+
+    // Valida cor hex quando informada (ex.: #FF6B00).
+    if (
+      dto.themeColor !== undefined &&
+      dto.themeColor !== null &&
+      String(dto.themeColor).trim() !== '' &&
+      !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(dto.themeColor).trim())
+    ) {
+      throw new Error('Cor de destaque inválida (use formato hex, ex.: #FF6B00)');
+    }
+
+    for (const [key, col] of map) {
+      if ((dto as any)[key] !== undefined) {
+        const raw = (dto as any)[key];
+        const value = raw === null || raw === '' ? null : String(raw).trim();
+        sets.push(`${col} = $${idx++}`);
+        vals.push(value);
+      }
+    }
+
+    if (sets.length === 0) {
+      return this.getAppearance(partnerId);
+    }
+
+    sets.push(`"updatedAt" = NOW()`);
+    vals.push(partnerId);
+    await execute(
+      `UPDATE "Partner" SET ${sets.join(', ')} WHERE id = $${idx}`,
+      vals
+    );
+    return this.getAppearance(partnerId);
+  }
 }

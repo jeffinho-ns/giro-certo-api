@@ -20,6 +20,9 @@ export interface PublicStoreDto {
   name: string;
   tradingName: string | null;
   photoUrl: string | null;
+  coverUrl: string | null;
+  themeColor: string | null;
+  description: string | null;
   address: string;
   latitude: number;
   longitude: number;
@@ -74,7 +77,8 @@ export class StorePublicService {
   // ============================================
   async getStorefrontBySlug(slug: string): Promise<PublicStorefrontDto | null> {
     const partner = await queryOne<any>(
-      `SELECT id, slug, name, "tradingName", "photoUrl", address, latitude, longitude,
+      `SELECT id, slug, name, "tradingName", "photoUrl", "storeCoverUrl", "storeThemeColor",
+              "storeDescription", address, latitude, longitude,
               phone, "avgPreparationTime", "operatingHours", rating, "reviewCount", "isBlocked"
        FROM "Partner"
        WHERE slug = $1`,
@@ -88,6 +92,9 @@ export class StorePublicService {
       name: partner.name,
       tradingName: partner.tradingName ?? null,
       photoUrl: partner.photoUrl ?? null,
+      coverUrl: partner.storeCoverUrl ?? null,
+      themeColor: partner.storeThemeColor ?? null,
+      description: partner.storeDescription ?? null,
       address: partner.address,
       latitude: partner.latitude,
       longitude: partner.longitude,
