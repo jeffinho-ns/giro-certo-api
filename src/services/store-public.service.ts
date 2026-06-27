@@ -9,9 +9,11 @@ import {
   StoreOrderStatus,
 } from '../types';
 import { DeliveryPricingService } from './delivery-pricing.service';
+import { StoreCouponService } from './store-coupon.service';
 import { normalizeCpfCnpjDigits } from '../utils/cpf-cnpj';
 
 const pricingService = new DeliveryPricingService();
+const couponService = new StoreCouponService();
 
 /** Loja pública (DTO reduzido) — NUNCA expõe cnpj, conta bancária, comissões, etc. */
 export interface PublicStoreDto {
@@ -301,6 +303,21 @@ export class StorePublicService {
       computedItems.reduce((acc, it) => acc + it.lineTotal, 0).toFixed(2)
     );
 
+    // Cupom: validado e precificado no servidor (nunca confiar no cliente).
+    let discount = 0;
+    let couponId: string | null = null;
+    let couponCode: string | null = null;
+    if (dto.couponCode && String(dto.couponCode).trim()) {
+      const result = await couponService.validateAndCompute(
+        partner.id,
+        String(dto.couponCode),
+        subtotal
+      );
+      discount = result.discount;
+      couponId = result.coupon.id;
+      couponCode = result.coupon.code;
+    }
+
     // Taxa de entrega: cotada no servidor quando há coordenadas do cliente.
     let deliveryFee = 0;
     if (
@@ -323,7 +340,7 @@ export class StorePublicService {
       }
     }
 
-    const total = Number((subtotal + deliveryFee).toFixed(2));
+    const total = Number(Math.max(0, subtotal - discount + deliveryFee).toFixed(2));
     const trackingToken = randomBytes(24).toString('hex');
 
     const created = await transaction(async (client) => {
@@ -340,9 +357,9 @@ export class StorePublicService {
           id, "partnerId", "customerId",
           "customerName", "customerPhone", "customerAddress", "customerCpf",
           "customerLatitude", "customerLongitude", notes,
-          subtotal, "deliveryFee", total, currency,
+          subtotal, "deliveryFee", discount, "couponCode", "couponId", total, currency,
           status, "trackingToken"
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
         [
           orderId,
           partner.id,
@@ -356,6 +373,9 @@ export class StorePublicService {
           dto.notes ? String(dto.notes) : null,
           subtotal,
           deliveryFee,
+          discount,
+          couponCode,
+          couponId,
           total,
           'BRL',
           StoreOrderStatus.awaiting_payment,
@@ -391,10 +411,34 @@ export class StorePublicService {
       trackingToken,
       status: StoreOrderStatus.awaiting_payment,
       subtotal,
+      discount,
+      couponCode,
       deliveryFee,
       total,
       currency: 'BRL',
-      // O início do pagamento (Asaas) será conectado no Passo 4.
+    };
+  }
+
+  /**
+   * Pré-validação de cupom para a vitrine (mostra o desconto antes de finalizar).
+   * Retorna o desconto calculado sobre o subtotal informado.
+   */
+  async previewCoupon(slug: string, code: string, subtotal: number) {
+    const partner = await queryOne<any>(
+      `SELECT id FROM "Partner" WHERE slug = $1`,
+      [slug]
+    );
+    if (!partner) throw new Error('Loja não encontrada');
+    const { coupon, discount } = await couponService.validateAndCompute(
+      partner.id,
+      code,
+      Number(subtotal) || 0
+    );
+    return {
+      code: coupon.code,
+      discountType: coupon.discountType,
+      discountValue: coupon.discountValue,
+      discount,
     };
   }
 
@@ -403,7 +447,7 @@ export class StorePublicService {
   // ============================================
   async getOrderStatusByToken(token: string) {
     const order = await queryOne<any>(
-      `SELECT o.id, o.status, o.subtotal, o."deliveryFee", o.total, o.currency,
+      `SELECT o.id, o.status, o.subtotal, o.discount, o."couponCode", o."deliveryFee", o.total, o.currency,
               o."createdAt", o."paidAt", o."acceptedAt", o."dispatchedAt",
               o."completedAt", o."cancelledAt", o."deliveryOrderId",
               p.name AS "storeName", p.slug AS "storeSlug"
@@ -428,6 +472,8 @@ export class StorePublicService {
       store: { name: order.storeName, slug: order.storeSlug },
       items,
       subtotal: order.subtotal,
+      discount: order.discount ?? 0,
+      couponCode: order.couponCode ?? null,
       deliveryFee: order.deliveryFee,
       total: order.total,
       currency: order.currency,

@@ -14,7 +14,7 @@ export class StoreOrderService {
   private readonly listColumns = `
     id, "partnerId", "customerName", "customerPhone", "customerAddress",
     "customerLatitude", "customerLongitude", notes,
-    subtotal, "deliveryFee", total, currency, status,
+    subtotal, "deliveryFee", discount, "couponCode", total, currency, status,
     "trackingToken", "deliveryOrderId", "invoiceUrl",
     "createdAt", "paidAt", "acceptedAt", "dispatchedAt", "completedAt", "cancelledAt"
   `;

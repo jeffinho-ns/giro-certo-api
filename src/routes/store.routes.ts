@@ -15,6 +15,7 @@ const readLimiter = rateLimit({ windowMs: 60_000, max: 120, keyPrefix: 'store-pu
 const orderLimiter = rateLimit({ windowMs: 60_000, max: 10, keyPrefix: 'store-public-order' });
 
 router.get('/public/:slug', readLimiter, publicCtrl.getStorefront);
+router.post('/public/:slug/coupon/preview', readLimiter, publicCtrl.previewCoupon);
 router.post('/public/:slug/orders', orderLimiter, publicCtrl.createOrder);
 router.post('/public/orders/:token/checkout', orderLimiter, publicCtrl.checkout);
 router.get('/public/orders/:token', readLimiter, publicCtrl.getOrderStatus);
@@ -54,6 +55,12 @@ router.get('/manage/banners', manage.listBanners);
 router.post('/manage/banners', manage.createBanner);
 router.put('/manage/banners/:id', manage.updateBanner);
 router.delete('/manage/banners/:id', manage.deleteBanner);
+
+// --- Cupons de desconto ---
+router.get('/manage/coupons', manage.listCoupons);
+router.post('/manage/coupons', manage.createCoupon);
+router.put('/manage/coupons/:id', manage.updateCoupon);
+router.delete('/manage/coupons/:id', manage.deleteCoupon);
 
 // --- Personalização da vitrine ---
 router.get('/manage/appearance', manage.getAppearance);

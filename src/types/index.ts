@@ -906,6 +906,43 @@ export interface UpdateProductDto {
   sortOrder?: number;
 }
 
+export type CouponDiscountType = 'percent' | 'fixed';
+
+export interface StoreCoupon {
+  id: string;
+  partnerId: string;
+  code: string;
+  discountType: CouponDiscountType;
+  discountValue: number;
+  minSubtotal: number;
+  maxUses: number | null;
+  usedCount: number;
+  active: boolean;
+  expiresAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateStoreCouponDto {
+  code: string;
+  discountType: CouponDiscountType;
+  discountValue: number;
+  minSubtotal?: number;
+  maxUses?: number | null;
+  active?: boolean;
+  expiresAt?: Date | null;
+}
+
+export interface UpdateStoreCouponDto {
+  code?: string;
+  discountType?: CouponDiscountType;
+  discountValue?: number;
+  minSubtotal?: number;
+  maxUses?: number | null;
+  active?: boolean;
+  expiresAt?: Date | null;
+}
+
 export interface CreateStoreBannerDto {
   imageUrl: string;
   title?: string;
@@ -948,5 +985,7 @@ export interface CreateStoreOrderDto {
   customerLatitude?: number;
   customerLongitude?: number;
   notes?: string;
+  /** Código de cupom (validado e precificado no servidor). */
+  couponCode?: string;
   items: CreateStoreOrderItemDto[];
 }

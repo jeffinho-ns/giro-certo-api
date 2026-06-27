@@ -8,7 +8,10 @@ import {
 } from './asaas.service';
 import { brazilDueDateToday } from './delivery-payment.service';
 import { resolvePayerCpfCnpj, normalizeCpfCnpjDigits } from '../utils/cpf-cnpj';
+import { StoreCouponService } from './store-coupon.service';
 import { StoreOrder, StoreOrderStatus } from '../types';
+
+const couponService = new StoreCouponService();
 
 export interface StoreCheckoutResult {
   status: StoreOrderStatus;
@@ -187,6 +190,15 @@ export class StorePaymentService {
        WHERE id = $1`,
       [order.id, nextStatus, markPaid, event, JSON.stringify(body)]
     );
+
+    // Conta o uso do cupom apenas quando o pagamento é confirmado.
+    if (markPaid && (order as any).couponId) {
+      try {
+        await couponService.incrementUsage(String((order as any).couponId));
+      } catch {
+        /* não bloqueia a confirmação do pagamento */
+      }
+    }
 
     return true;
   }

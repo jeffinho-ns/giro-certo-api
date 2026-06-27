@@ -38,6 +38,20 @@ export class StorePublicController {
     }
   };
 
+  previewCoupon = async (req: Request, res: Response) => {
+    try {
+      const slug = this.param(req, 'slug');
+      const result = await publicService.previewCoupon(
+        slug,
+        req.body?.code,
+        Number(req.body?.subtotal)
+      );
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
   checkout = async (req: Request, res: Response) => {
     try {
       const token = this.param(req, 'token');

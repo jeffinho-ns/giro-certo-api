@@ -2,11 +2,13 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { StoreCatalogService } from '../services/store-catalog.service';
 import { StoreOrderService } from '../services/store-order.service';
+import { StoreCouponService } from '../services/store-coupon.service';
 import { DeliveryService } from '../services/delivery.service';
 import { StoreOrderStatus } from '../types';
 
 const catalogService = new StoreCatalogService();
 const orderService = new StoreOrderService();
+const couponService = new StoreCouponService();
 const deliveryService = new DeliveryService();
 
 /**
@@ -242,6 +244,48 @@ export class StoreManageController {
   deleteBanner = async (req: AuthRequest, res: Response) => {
     try {
       await catalogService.deleteBanner(this.partnerId(req), this.param(req, 'id'));
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  // --- Cupons ---
+
+  listCoupons = async (req: AuthRequest, res: Response) => {
+    try {
+      const coupons = await couponService.list(this.partnerId(req));
+      res.json({ coupons });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  createCoupon = async (req: AuthRequest, res: Response) => {
+    try {
+      const coupon = await couponService.create(this.partnerId(req), req.body);
+      res.status(201).json({ coupon });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  updateCoupon = async (req: AuthRequest, res: Response) => {
+    try {
+      const coupon = await couponService.update(
+        this.partnerId(req),
+        this.param(req, 'id'),
+        req.body
+      );
+      res.json({ coupon });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  deleteCoupon = async (req: AuthRequest, res: Response) => {
+    try {
+      await couponService.remove(this.partnerId(req), this.param(req, 'id'));
       res.json({ ok: true });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
