@@ -65,6 +65,126 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
   }
 });
 
+const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+const WEEKDAY_KEYS = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+] as const;
+
+/**
+ * Extrai apenas campos operacionais seguros para o lojista.
+ * Nunca permite isBlocked, CNPJ, payout, etc.
+ */
+function parseSafePartnerMeUpdate(body: unknown): UpdatePartnerDto {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error('Corpo inválido');
+  }
+  const raw = body as Record<string, unknown>;
+  const data: UpdatePartnerDto = {};
+
+  if (raw.phone !== undefined) {
+    if (raw.phone !== null && typeof raw.phone !== 'string') {
+      throw new Error('phone deve ser texto');
+    }
+    const phone = (raw.phone as string | null)?.trim();
+    if (phone) data.phone = phone;
+  }
+
+  if (raw.avgPreparationTime !== undefined) {
+    const n = Number(raw.avgPreparationTime);
+    if (!Number.isFinite(n) || n < 0 || n > 24 * 60) {
+      throw new Error('avgPreparationTime inválido (minutos)');
+    }
+    data.avgPreparationTime = Math.round(n);
+  }
+
+  if (raw.maxServiceRadius !== undefined) {
+    const n = Number(raw.maxServiceRadius);
+    if (!Number.isFinite(n) || n < 0 || n > 200) {
+      throw new Error('maxServiceRadius inválido (km)');
+    }
+    data.maxServiceRadius = n;
+  }
+
+  if (raw.operatingHours !== undefined) {
+    if (raw.operatingHours === null) {
+      data.operatingHours = null;
+    } else if (
+      typeof raw.operatingHours !== 'object' ||
+      Array.isArray(raw.operatingHours)
+    ) {
+      throw new Error('operatingHours inválido');
+    } else {
+      const hours = raw.operatingHours as Record<string, unknown>;
+      const normalized: Record<string, { open?: string; close?: string; closed?: boolean }> =
+        {};
+      for (const day of WEEKDAY_KEYS) {
+        const dayHours = hours[day];
+        if (dayHours === undefined) continue;
+        if (!dayHours || typeof dayHours !== 'object' || Array.isArray(dayHours)) {
+          throw new Error(`operatingHours.${day} inválido`);
+        }
+        const d = dayHours as { open?: unknown; close?: unknown; closed?: unknown };
+        if (d.closed === true) {
+          normalized[day] = { closed: true };
+          continue;
+        }
+        const open = typeof d.open === 'string' ? d.open.trim() : '';
+        const close = typeof d.close === 'string' ? d.close.trim() : '';
+        if (!TIME_RE.test(open) || !TIME_RE.test(close)) {
+          throw new Error(
+            `operatingHours.${day}: use horários HH:MM (ex.: 08:00–22:00) ou closed: true`
+          );
+        }
+        normalized[day] = { open, close };
+      }
+      data.operatingHours = normalized;
+    }
+  }
+
+  if (
+    data.phone === undefined &&
+    data.avgPreparationTime === undefined &&
+    data.maxServiceRadius === undefined &&
+    data.operatingHours === undefined
+  ) {
+    throw new Error(
+      'Informe ao menos um campo: operatingHours, avgPreparationTime, maxServiceRadius ou phone'
+    );
+  }
+
+  return data;
+}
+
+/** Atualizar configurações operacionais da própria loja (lojista). */
+router.put('/me', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+
+    const user = await queryOne<{ partnerId: string | null }>(
+      'SELECT "partnerId" FROM "User" WHERE id = $1',
+      [req.userId]
+    );
+
+    if (!user || !user.partnerId) {
+      return res.status(404).json({ error: 'Você não está vinculado a nenhuma loja' });
+    }
+
+    const data = parseSafePartnerMeUpdate(req.body);
+    const partner = await partnerService.updatePartner(user.partnerId, data);
+    res.json({ partner });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 /** Modelo de mensagem para o lojista enviar ao cliente no WhatsApp. */
 router.get(
   '/me/whatsapp-order-template',

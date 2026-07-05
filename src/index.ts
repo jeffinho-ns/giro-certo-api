@@ -39,6 +39,7 @@ import {
 import { incrementOpsMetric } from './utils/ops-metrics';
 import { persistRiderLocationFromSocketEvent } from './services/rider-location-persist.service';
 import { assertProductionEnv } from './utils/startup-env';
+import { query } from './lib/db';
 
 dotenv.config();
 assertProductionEnv();
@@ -80,9 +81,29 @@ app.use(express.json({ limit: process.env.JSON_PAYLOAD_LIMIT || '50mb' }));
 app.use(express.urlencoded({ limit: process.env.JSON_PAYLOAD_LIMIT || '50mb', extended: true }));
 app.use('/uploads', express.static('uploads'));
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Giro Certo API is running' });
+// Health check — ping rápido no PostgreSQL (sem segredos na resposta)
+const HEALTH_DB_TIMEOUT_MS = 3000;
+
+app.get('/health', async (_req, res) => {
+  try {
+    await Promise.race([
+      query('SELECT 1'),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('db_timeout')), HEALTH_DB_TIMEOUT_MS);
+      }),
+    ]);
+    res.status(200).json({
+      status: 'ok',
+      db: 'up',
+      message: 'Giro Certo API is running',
+    });
+  } catch {
+    res.status(503).json({
+      status: 'degraded',
+      db: 'down',
+      message: 'Giro Certo API is running but database is unavailable',
+    });
+  }
 });
 
 // API Routes
