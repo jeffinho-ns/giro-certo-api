@@ -11,6 +11,7 @@ import {
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { StoreCouponService } from './store-coupon.service';
 import { normalizeCpfCnpjDigits } from '../utils/cpf-cnpj';
+import { computePartnerIsOpen } from '../utils/partner-is-open';
 
 const pricingService = new DeliveryPricingService();
 const couponService = new StoreCouponService();
@@ -113,7 +114,7 @@ export class StorePublicService {
       operatingHours: partner.operatingHours ?? null,
       rating: partner.rating ?? 0,
       reviewCount: partner.reviewCount ?? 0,
-      isOpen: !partner.isBlocked,
+      isOpen: computePartnerIsOpen(!!partner.isBlocked, partner.operatingHours),
     };
 
     const banners = await query<{ id: string; imageUrl: string; title: string | null; linkUrl: string | null }>(
@@ -276,11 +277,17 @@ export class StorePublicService {
   // ============================================
   async createOrder(slug: string, dto: CreateStoreOrderDto) {
     const partner = await queryOne<any>(
-      `SELECT id, latitude, longitude, "isBlocked" FROM "Partner" WHERE slug = $1`,
+      `SELECT id, latitude, longitude, "isBlocked", "operatingHours" FROM "Partner" WHERE slug = $1`,
       [slug]
     );
     if (!partner) throw new Error('Loja não encontrada');
-    if (partner.isBlocked) throw new Error('Loja indisponível no momento');
+    if (!computePartnerIsOpen(!!partner.isBlocked, partner.operatingHours)) {
+      throw new Error(
+        partner.isBlocked
+          ? 'Loja indisponível no momento'
+          : 'Loja fechada no momento; não é possível fazer pedidos'
+      );
+    }
 
     const name = (dto.customerName ?? '').trim();
     const phone = (dto.customerPhone ?? '').trim();

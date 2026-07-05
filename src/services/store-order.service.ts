@@ -141,7 +141,11 @@ export class StoreOrderService {
     return { storeOrder: storeOrder!, deliveryOrder: dispatched };
   }
 
-  async rejectOrder(partnerId: string, id: string, reason?: string): Promise<StoreOrder> {
+  async rejectOrder(
+    partnerId: string,
+    id: string,
+    reason?: string
+  ): Promise<{ order: StoreOrder; message: string }> {
     const order = await queryOne<StoreOrder>(
       `SELECT id, status FROM "StoreOrder" WHERE id = $1 AND "partnerId" = $2`,
       [id, partnerId]
@@ -154,6 +158,7 @@ export class StoreOrderService {
       throw new Error('Pedido não pode ser recusado neste status');
     }
 
+    const wasPaid = order.status === StoreOrderStatus.paid;
     const note = reason ? String(reason).slice(0, 500) : null;
     const updated = await queryOne<StoreOrder>(
       `UPDATE "StoreOrder"
@@ -165,6 +170,12 @@ export class StoreOrderService {
        RETURNING ${this.listColumns}`,
       [id, StoreOrderStatus.rejected, note]
     );
-    return updated!;
+
+    // Estorno Asaas é operacional/manual no go-live — só orientamos o lojista.
+    const message = wasPaid
+      ? 'Pedido recusado. O pagamento já foi recebido — o estorno deve ser feito manualmente no painel do Asaas.'
+      : 'Pedido recusado.';
+
+    return { order: updated!, message };
   }
 }

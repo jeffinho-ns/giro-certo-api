@@ -372,12 +372,12 @@ export class StoreManageController {
 
   rejectOrder = async (req: AuthRequest, res: Response) => {
     try {
-      const order = await orderService.rejectOrder(
+      const { order, message } = await orderService.rejectOrder(
         this.partnerId(req),
         this.param(req, 'id'),
         req.body?.reason
       );
-      res.json({ order });
+      res.json({ order, message });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
