@@ -3,6 +3,9 @@ import type { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { queryOne } from '../lib/db';
 import { UserRole } from '../types';
+import { ssePublish, ssePublishGlobal, ssePublishStoreOrder } from './sse-hub';
+
+export { ssePublishStoreOrder };
 
 export function getIo(app: Application): Server | undefined {
   return app.get('io') as Server | undefined;
@@ -13,6 +16,7 @@ export function ioEmit(app: Application, event: string, payload: unknown): void 
   if (io) {
     io.emit(event, payload);
   }
+  ssePublishGlobal(event, payload);
 }
 
 export function ioEmitToRoom(
@@ -25,6 +29,7 @@ export function ioEmitToRoom(
   if (io) {
     io.to(room).emit(event, payload);
   }
+  ssePublish(room, event, payload);
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';

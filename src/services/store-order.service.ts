@@ -2,6 +2,8 @@ import { query, queryOne, execute } from '../lib/db';
 import { DeliveryService } from './delivery.service';
 import { DeliveryOrder, StoreOrder, StoreOrderStatus } from '../types';
 import { asaasRefundPayment, isAsaasConfigured } from './asaas.service';
+import { ssePublishStoreOrder } from '../utils/socket-events';
+import { ssePublish } from '../utils/sse-hub';
 
 /**
  * Gestão dos pedidos da loja virtual pelo LOJISTA (escopado por partnerId).
@@ -139,6 +141,14 @@ export class StoreOrderService {
       [order.id]
     );
 
+    if (storeOrder?.trackingToken) {
+      ssePublishStoreOrder(storeOrder.trackingToken, 'store_order:update', {
+        orderId: storeOrder.id,
+        status: storeOrder.status,
+        deliveryOrderId,
+      });
+    }
+
     return { storeOrder: storeOrder!, deliveryOrder: dispatched };
   }
 
@@ -199,6 +209,18 @@ export class StoreOrderService {
         ? 'Pedido recusado. O estorno PIX foi solicitado no Asaas (confirme no painel em alguns minutos).'
         : refundNote ?? 'Pedido recusado. Verifique o estorno no painel Asaas.'
       : 'Pedido recusado.';
+
+    if (updated?.trackingToken) {
+      ssePublishStoreOrder(updated.trackingToken, 'store_order:update', {
+        orderId: updated.id,
+        status: updated.status,
+      });
+    }
+    ssePublish(`store:${partnerId}`, 'delivery:store_refresh', {
+      storeId: partnerId,
+      reason: 'store_order_rejected',
+      orderId: id,
+    });
 
     return { order: updated!, message };
   }

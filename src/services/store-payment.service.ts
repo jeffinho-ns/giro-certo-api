@@ -10,6 +10,7 @@ import { brazilDueDateToday } from './delivery-payment.service';
 import { resolvePayerCpfCnpj, normalizeCpfCnpjDigits } from '../utils/cpf-cnpj';
 import { StoreCouponService } from './store-coupon.service';
 import { StoreOrder, StoreOrderStatus } from '../types';
+import { ssePublishStoreOrder } from '../utils/socket-events';
 
 const couponService = new StoreCouponService();
 
@@ -198,6 +199,22 @@ export class StorePaymentService {
       } catch {
         /* não bloqueia a confirmação do pagamento */
       }
+    }
+
+    if (order.trackingToken) {
+      ssePublishStoreOrder(order.trackingToken, 'store_order:update', {
+        orderId: order.id,
+        status: nextStatus,
+        paid: markPaid,
+      });
+    }
+    if (markPaid && order.partnerId) {
+      const { ssePublish } = await import('../utils/sse-hub');
+      ssePublish(`store:${order.partnerId}`, 'delivery:store_refresh', {
+        storeId: order.partnerId,
+        reason: 'store_order_paid',
+        orderId: order.id,
+      });
     }
 
     return true;

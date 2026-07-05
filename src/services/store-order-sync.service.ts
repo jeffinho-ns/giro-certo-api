@@ -1,5 +1,6 @@
-import { execute } from '../lib/db';
+import { execute, queryOne } from '../lib/db';
 import { DeliveryStatus, StoreOrderStatus } from '../types';
+import { ssePublishStoreOrder } from '../utils/socket-events';
 
 /**
  * Espelha o status da DeliveryOrder no StoreOrder vinculado (vitrine).
@@ -56,4 +57,16 @@ export async function syncStoreOrderFromDelivery(
        AND status NOT IN ('completed', 'cancelled', 'rejected')`,
     vals
   );
+
+  const row = await queryOne<{ trackingToken: string; status: string }>(
+    `SELECT "trackingToken", status FROM "StoreOrder" WHERE id = $1`,
+    [storeOrderId]
+  );
+  if (row?.trackingToken && next) {
+    ssePublishStoreOrder(row.trackingToken, 'store_order:update', {
+      status: row.status,
+      deliveryOrderId,
+      deliveryStatus,
+    });
+  }
 }
