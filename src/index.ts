@@ -33,12 +33,15 @@ import { UserRole } from './types';
 import { DeliveryService } from './services/delivery.service';
 import {
   canJoinOrderTrackingRoom,
+  resolveDeliveryOrderIdByTrackingToken,
   resolveSocketUserFromToken,
 } from './utils/socket-events';
 import { incrementOpsMetric } from './utils/ops-metrics';
 import { persistRiderLocationFromSocketEvent } from './services/rider-location-persist.service';
+import { assertProductionEnv } from './utils/startup-env';
 
 dotenv.config();
+assertProductionEnv();
 
 const app = express();
 
@@ -177,6 +180,34 @@ io.on('connection', (socket) => {
       return;
     }
     socket.join(`order:${orderId}`);
+    socket.emit('tracking:joined', { orderId });
+  });
+
+  /**
+   * Cliente final (vitrine): entra na sala da entrega só com trackingToken.
+   * Sem JWT. Localização do rider só enquanto a entrega está ativa.
+   */
+  socket.on('tracking:join-by-token', async (data: { trackingToken?: string }) => {
+    const trackingToken = data?.trackingToken;
+    if (!trackingToken || typeof trackingToken !== 'string') {
+      socket.emit('tracking:error', { message: 'Token de acompanhamento inválido' });
+      return;
+    }
+    try {
+      const orderId = await resolveDeliveryOrderIdByTrackingToken(trackingToken);
+      if (!orderId) {
+        void incrementOpsMetric('socket_failures_total', 1, 'join_by_token_forbidden');
+        socket.emit('tracking:error', {
+          message: 'Pedido sem entrega ativa ou token inválido',
+        });
+        return;
+      }
+      socket.join(`order:${orderId}`);
+      socket.emit('tracking:joined', { orderId, via: 'token' });
+    } catch (err) {
+      console.warn('[tracking:join-by-token]', err);
+      socket.emit('tracking:error', { message: 'Falha ao entrar no acompanhamento' });
+    }
   });
 
   socket.on('tracking:leave-order', (data: { orderId?: string }) => {

@@ -530,7 +530,9 @@ export class StorePublicService {
       `SELECT o.id, o.status, o.subtotal, o.discount, o."couponCode", o."deliveryFee", o.total, o.currency,
               o."createdAt", o."paidAt", o."acceptedAt", o."dispatchedAt",
               o."completedAt", o."cancelledAt", o."deliveryOrderId",
-              p.name AS "storeName", p.slug AS "storeSlug"
+              o."customerLatitude", o."customerLongitude",
+              p.name AS "storeName", p.slug AS "storeSlug",
+              p.latitude AS "storeLatitude", p.longitude AS "storeLongitude"
        FROM "StoreOrder" o
        JOIN "Partner" p ON p.id = o."partnerId"
        WHERE o."trackingToken" = $1`,
@@ -550,6 +552,45 @@ export class StorePublicService {
       `SELECT id FROM "StoreReview" WHERE "storeOrderId" = $1`,
       [order.id]
     );
+
+    // Tracking: coords da loja/cliente + posição do rider só em entrega ativa.
+    let tracking: {
+      active: boolean;
+      storeLat: number | null;
+      storeLng: number | null;
+      deliveryLat: number | null;
+      deliveryLng: number | null;
+      riderLat: number | null;
+      riderLng: number | null;
+    } | null = null;
+
+    if (order.deliveryOrderId) {
+      const delivery = await queryOne<any>(
+        `SELECT d.status, d."deliveryLatitude", d."deliveryLongitude",
+                d."storeLatitude", d."storeLongitude",
+                u."currentLat" AS "riderLat", u."currentLng" AS "riderLng"
+         FROM "DeliveryOrder" d
+         LEFT JOIN "User" u ON u.id = d."riderId"
+         WHERE d.id = $1`,
+        [order.deliveryOrderId]
+      );
+      const active =
+        !!delivery &&
+        delivery.status !== 'completed' &&
+        delivery.status !== 'cancelled';
+      tracking = {
+        active,
+        storeLat: delivery?.storeLatitude ?? order.storeLatitude ?? null,
+        storeLng: delivery?.storeLongitude ?? order.storeLongitude ?? null,
+        deliveryLat:
+          delivery?.deliveryLatitude ?? order.customerLatitude ?? null,
+        deliveryLng:
+          delivery?.deliveryLongitude ?? order.customerLongitude ?? null,
+        // Privacidade: posição do rider só durante entrega ativa.
+        riderLat: active ? delivery?.riderLat ?? null : null,
+        riderLng: active ? delivery?.riderLng ?? null : null,
+      };
+    }
 
     return {
       id: order.id,
@@ -571,6 +612,7 @@ export class StorePublicService {
         cancelledAt: order.cancelledAt,
       },
       hasDelivery: !!order.deliveryOrderId,
+      tracking,
       reviewed: !!review,
     };
   }

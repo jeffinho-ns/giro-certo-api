@@ -16,12 +16,14 @@ router.post('/asaas', async (req, res: Response) => {
   try {
     const expected = process.env.ASAAS_WEBHOOK_TOKEN?.trim();
     const received = req.get('asaas-access-token');
-    if (expected) {
-      if (!received || received !== expected) {
-        return res.status(401).json({ error: 'Webhook não autorizado' });
+    // Fail-closed: em produção o token é obrigatório (também validado no startup).
+    if (!expected) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[asaas webhook] ASAAS_WEBHOOK_TOKEN ausente — recusando');
+        return res.status(503).json({ error: 'Webhook não configurado' });
       }
-    } else if (process.env.NODE_ENV === 'production') {
-      console.warn('[asaas webhook] ASAAS_WEBHOOK_TOKEN não definido em produção');
+    } else if (!received || received !== expected) {
+      return res.status(401).json({ error: 'Webhook não autorizado' });
     }
 
     const body = req.body as Record<string, unknown>;

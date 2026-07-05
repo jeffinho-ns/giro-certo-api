@@ -72,3 +72,31 @@ export async function canJoinOrderTrackingRoom(
   if (user.partnerId && order.storeId === user.partnerId) return true;
   return false;
 }
+
+/**
+ * Cliente anônimo da vitrine: entra na sala da DeliveryOrder
+ * apenas com o trackingToken do StoreOrder (sem JWT).
+ * Só permite enquanto a entrega está ativa (não concluída/cancelada).
+ */
+export async function resolveDeliveryOrderIdByTrackingToken(
+  trackingToken: string
+): Promise<string | null> {
+  const token = trackingToken?.trim();
+  if (!token || token.length < 16) return null;
+
+  const row = await queryOne<{
+    deliveryOrderId: string | null;
+    deliveryStatus: string | null;
+  }>(
+    `SELECT o."deliveryOrderId", d.status AS "deliveryStatus"
+     FROM "StoreOrder" o
+     LEFT JOIN "DeliveryOrder" d ON d.id = o."deliveryOrderId"
+     WHERE o."trackingToken" = $1`,
+    [token]
+  );
+  if (!row?.deliveryOrderId) return null;
+
+  const status = row.deliveryStatus;
+  if (status === 'completed' || status === 'cancelled') return null;
+  return row.deliveryOrderId;
+}
