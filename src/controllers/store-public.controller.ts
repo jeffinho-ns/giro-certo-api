@@ -91,4 +91,32 @@ export class StorePublicController {
       res.status(400).json({ error: error.message });
     }
   };
+
+  autocompletePlaces = async (req: Request, res: Response) => {
+    try {
+      const input = String(req.query.input ?? '').trim();
+      const sessionToken = String(req.query.sessionToken ?? '').trim() || undefined;
+      if (input.length < 3) {
+        return res.json({ predictions: [] });
+      }
+      const predictions = await publicService.autocompleteAddress(input, sessionToken);
+      res.json({ predictions });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
+  placeDetails = async (req: Request, res: Response) => {
+    try {
+      const placeId = String(req.query.placeId ?? '').trim();
+      const sessionToken = String(req.query.sessionToken ?? '').trim() || undefined;
+      if (!placeId) {
+        return res.status(400).json({ error: 'placeId obrigatório' });
+      }
+      const place = await publicService.placeDetails(placeId, sessionToken);
+      res.json({ place });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
 }

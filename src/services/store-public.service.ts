@@ -12,9 +12,11 @@ import { DeliveryPricingService } from './delivery-pricing.service';
 import { StoreCouponService } from './store-coupon.service';
 import { normalizeCpfCnpjDigits } from '../utils/cpf-cnpj';
 import { computePartnerIsOpen } from '../utils/partner-is-open';
+import { GooglePlacesService } from './google-places.service';
 
 const pricingService = new DeliveryPricingService();
 const couponService = new StoreCouponService();
+const googlePlacesService = new GooglePlacesService();
 
 /** Loja pública (DTO reduzido) — NUNCA expõe cnpj, conta bancária, comissões, etc. */
 export interface PublicStoreDto {
@@ -291,10 +293,27 @@ export class StorePublicService {
 
     const name = (dto.customerName ?? '').trim();
     const phone = (dto.customerPhone ?? '').trim();
-    const address = (dto.customerAddress ?? '').trim();
+    let address = (dto.customerAddress ?? '').trim();
     if (!name) throw new Error('Nome do cliente é obrigatório');
     if (!phone) throw new Error('Telefone do cliente é obrigatório');
     if (!address) throw new Error('Endereço do cliente é obrigatório');
+
+    let customerLatitude =
+      typeof dto.customerLatitude === 'number' && Number.isFinite(dto.customerLatitude)
+        ? dto.customerLatitude
+        : null;
+    let customerLongitude =
+      typeof dto.customerLongitude === 'number' && Number.isFinite(dto.customerLongitude)
+        ? dto.customerLongitude
+        : null;
+
+    // Sem GPS do cliente: geocodifica o endereço no servidor (taxa de entrega + despacho).
+    if (customerLatitude == null || customerLongitude == null) {
+      const geocoded = await this.geocodeCustomerAddress(address);
+      customerLatitude = geocoded.latitude;
+      customerLongitude = geocoded.longitude;
+      address = geocoded.formattedAddress || address;
+    }
     if (!Array.isArray(dto.items) || dto.items.length === 0) {
       throw new Error('O pedido precisa de pelo menos um item');
     }
@@ -408,8 +427,8 @@ export class StorePublicService {
     // Taxa de entrega: cotada no servidor quando há coordenadas do cliente.
     let deliveryFee = 0;
     if (
-      typeof dto.customerLatitude === 'number' &&
-      typeof dto.customerLongitude === 'number' &&
+      customerLatitude != null &&
+      customerLongitude != null &&
       typeof partner.latitude === 'number' &&
       typeof partner.longitude === 'number'
     ) {
@@ -417,8 +436,8 @@ export class StorePublicService {
         const quote = await pricingService.calculateQuote({
           storeLatitude: partner.latitude,
           storeLongitude: partner.longitude,
-          deliveryLatitude: dto.customerLatitude,
-          deliveryLongitude: dto.customerLongitude,
+          deliveryLatitude: customerLatitude,
+          deliveryLongitude: customerLongitude,
         });
         deliveryFee = quote.deliveryFee;
       } catch {
@@ -455,8 +474,8 @@ export class StorePublicService {
           phone,
           address,
           normalizeCpfCnpjDigits(dto.customerCpf),
-          dto.customerLatitude ?? null,
-          dto.customerLongitude ?? null,
+          customerLatitude,
+          customerLongitude,
           dto.notes ? String(dto.notes) : null,
           subtotal,
           deliveryFee,
@@ -621,6 +640,31 @@ export class StorePublicService {
       hasDelivery: !!order.deliveryOrderId,
       tracking,
       reviewed: !!review,
+    };
+  }
+
+  /** Autocomplete de endereço para checkout público (sem auth). */
+  async autocompleteAddress(input: string, sessionToken?: string) {
+    return googlePlacesService.autocomplete(input, sessionToken);
+  }
+
+  /** Detalhes do endereço selecionado (coordenadas para taxa de entrega). */
+  async placeDetails(placeId: string, sessionToken?: string) {
+    return googlePlacesService.placeDetails(placeId, sessionToken);
+  }
+
+  private async geocodeCustomerAddress(address: string) {
+    const suggestions = await googlePlacesService.autocomplete(address);
+    if (suggestions.length === 0) {
+      throw new Error(
+        'Não foi possível localizar o endereço. Use "minha localização" ou informe rua, número, bairro e cidade.'
+      );
+    }
+    const details = await googlePlacesService.placeDetails(suggestions[0].placeId);
+    return {
+      latitude: details.latitude,
+      longitude: details.longitude,
+      formattedAddress: details.formattedAddress || address,
     };
   }
 }

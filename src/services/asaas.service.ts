@@ -146,6 +146,25 @@ export async function asaasGetTransfer(
   );
 }
 
+/** Estorno total ou parcial de cobrança recebida (PIX/cartão). */
+export async function asaasRefundPayment(
+  paymentId: string,
+  opts: { value?: number; description?: string } = {}
+): Promise<Record<string, unknown>> {
+  const body: Record<string, unknown> = {};
+  if (opts.value != null && Number.isFinite(opts.value) && opts.value > 0) {
+    body.value = opts.value;
+  }
+  if (opts.description?.trim()) {
+    body.description = opts.description.trim().slice(0, 500);
+  }
+  return asaasRequest(
+    'POST',
+    `/payments/${encodeURIComponent(paymentId)}/refund`,
+    Object.keys(body).length > 0 ? body : undefined
+  );
+}
+
 export function isAsaasConfigured(): boolean {
   return Boolean(process.env.ASAAS_API_KEY?.trim());
 }

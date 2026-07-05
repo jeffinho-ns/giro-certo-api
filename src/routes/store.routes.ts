@@ -20,6 +20,8 @@ router.post('/public/:slug/orders', orderLimiter, publicCtrl.createOrder);
 router.post('/public/orders/:token/checkout', orderLimiter, publicCtrl.checkout);
 router.post('/public/orders/:token/review', orderLimiter, publicCtrl.submitReview);
 router.get('/public/orders/:token', readLimiter, publicCtrl.getOrderStatus);
+router.get('/public/places/autocomplete', readLimiter, publicCtrl.autocompletePlaces);
+router.get('/public/places/details', readLimiter, publicCtrl.placeDetails);
 
 // ============================================
 // /api/store/manage/* — área do LOJISTA

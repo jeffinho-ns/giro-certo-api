@@ -58,9 +58,11 @@
 - [ ] Loop completo: vitrine → PIX → aceite → rider → mapa
 
 ### Ainda opcional antes do “final”
-- [ ] Estorno automático Asaas (hoje é mensagem + manual)
+- [x] Estorno automático Asaas na recusa de pedido pago
+- [x] Geocodificação de endereço no checkout (servidor + autocomplete público)
+- [x] Horário de funcionamento visível na vitrine quando fechada
+- [x] Página de configurações também no app Flutter
 - [ ] Liquidação automática do `StoreOrder` (piloto pode ser manual)
-- [ ] Página de configurações também no app Flutter
 
 ### Final do projeto (só quando for publicar nas lojas)
 - [ ] Package ID real (não `com.example.*`)

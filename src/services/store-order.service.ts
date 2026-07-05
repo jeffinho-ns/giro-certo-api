@@ -1,6 +1,7 @@
 import { query, queryOne, execute } from '../lib/db';
 import { DeliveryService } from './delivery.service';
 import { DeliveryOrder, StoreOrder, StoreOrderStatus } from '../types';
+import { asaasRefundPayment, isAsaasConfigured } from './asaas.service';
 
 /**
  * Gestão dos pedidos da loja virtual pelo LOJISTA (escopado por partnerId).
@@ -147,7 +148,7 @@ export class StoreOrderService {
     reason?: string
   ): Promise<{ order: StoreOrder; message: string }> {
     const order = await queryOne<StoreOrder>(
-      `SELECT id, status FROM "StoreOrder" WHERE id = $1 AND "partnerId" = $2`,
+      `SELECT id, status, "asaasPaymentId", total FROM "StoreOrder" WHERE id = $1 AND "partnerId" = $2`,
       [id, partnerId]
     );
     if (!order) throw new Error('Pedido não encontrado');
@@ -160,20 +161,43 @@ export class StoreOrderService {
 
     const wasPaid = order.status === StoreOrderStatus.paid;
     const note = reason ? String(reason).slice(0, 500) : null;
+
+    let refundNote: string | null = null;
+    if (wasPaid && order.asaasPaymentId && isAsaasConfigured()) {
+      try {
+        await asaasRefundPayment(String(order.asaasPaymentId), {
+          value: order.total ?? undefined,
+          description: `Estorno pedido loja #${order.id.slice(-8)}`,
+        });
+        refundNote = 'Estorno PIX solicitado automaticamente no Asaas.';
+      } catch (err: any) {
+        refundNote = `Estorno automático falhou: ${err?.message ?? 'erro desconhecido'}. Faça o estorno manualmente no painel Asaas.`;
+      }
+    } else if (wasPaid) {
+      refundNote =
+        'Pagamento já recebido — estorne manualmente no painel Asaas (ASAAS_API_KEY ausente ou cobrança sem ID).';
+    }
+
     const updated = await queryOne<StoreOrder>(
       `UPDATE "StoreOrder"
        SET status = $2,
-           notes = COALESCE($3, notes),
+           notes = CASE
+             WHEN $3 IS NOT NULL AND $4 IS NOT NULL THEN CONCAT(COALESCE(notes, ''), E'\\n', $3, ' — ', $4)
+             WHEN $3 IS NOT NULL THEN COALESCE($3, notes)
+             WHEN $4 IS NOT NULL THEN CONCAT(COALESCE(notes, ''), E'\\n', $4)
+             ELSE notes
+           END,
            "cancelledAt" = NOW(),
            "updatedAt" = NOW()
        WHERE id = $1
        RETURNING ${this.listColumns}`,
-      [id, StoreOrderStatus.rejected, note]
+      [id, StoreOrderStatus.rejected, note, refundNote]
     );
 
-    // Estorno Asaas é operacional/manual no go-live — só orientamos o lojista.
     const message = wasPaid
-      ? 'Pedido recusado. O pagamento já foi recebido — o estorno deve ser feito manualmente no painel do Asaas.'
+      ? refundNote?.includes('solicitado automaticamente')
+        ? 'Pedido recusado. O estorno PIX foi solicitado no Asaas (confirme no painel em alguns minutos).'
+        : refundNote ?? 'Pedido recusado. Verifique o estorno no painel Asaas.'
       : 'Pedido recusado.';
 
     return { order: updated!, message };
