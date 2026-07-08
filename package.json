@@ -31,6 +31,7 @@
     "db:migrate:store-coupons": "node scripts/run-store-coupons-migration.js",
     "db:migrate:store-reviews": "node scripts/run-store-reviews-migration.js",
     "db:migrate:store-admin-managed": "node scripts/run-store-admin-managed-migration.js",
+    "db:migrate:store-delivery-fee-policy": "node scripts/run-store-delivery-fee-policy-migration.js",
     "db:backfill:store-order-settlement": "node scripts/backfill-store-order-settlement.js"
   },
   "keywords": [

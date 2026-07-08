@@ -8,13 +8,17 @@ import {
   SelectedOptionSnapshot,
   StoreOrderStatus,
 } from '../types';
-import { DeliveryPricingService } from './delivery-pricing.service';
+import {
+  parseStoreDeliveryFeeConfig,
+  StoreDeliveryFeeService,
+  storeDeliveryFeePolicyLabel,
+} from './store-delivery-fee.service';
 import { StoreCouponService } from './store-coupon.service';
 import { normalizeCpfCnpjDigits } from '../utils/cpf-cnpj';
 import { computePartnerIsOpen } from '../utils/partner-is-open';
 import { GooglePlacesService } from './google-places.service';
 
-const pricingService = new DeliveryPricingService();
+const storeDeliveryFeeService = new StoreDeliveryFeeService();
 const couponService = new StoreCouponService();
 const googlePlacesService = new GooglePlacesService();
 
@@ -37,6 +41,12 @@ export interface PublicStoreDto {
   rating: number;
   reviewCount: number;
   isOpen: boolean;
+  deliveryFeePolicy: {
+    mode: string;
+    fixedFee: number | null;
+    maxFee: number | null;
+    label: string;
+  };
 }
 
 export interface PublicCatalogOptionDto {
@@ -92,12 +102,15 @@ export class StorePublicService {
     const partner = await queryOne<any>(
       `SELECT id, slug, name, "tradingName", "photoUrl", "storeCoverUrl", "storeThemeColor",
               "storeDescription", address, latitude, longitude,
-              phone, "avgPreparationTime", "operatingHours", rating, "reviewCount", "isBlocked"
+              phone, "avgPreparationTime", "operatingHours", rating, "reviewCount", "isBlocked",
+              store_delivery_fee_mode, store_delivery_fee_max, store_delivery_fee_fixed
        FROM "Partner"
        WHERE slug = $1`,
       [slug]
     );
     if (!partner) return null;
+
+    const feeConfig = parseStoreDeliveryFeeConfig(partner);
 
     const store: PublicStoreDto = {
       id: partner.id,
@@ -117,6 +130,12 @@ export class StorePublicService {
       rating: partner.rating ?? 0,
       reviewCount: partner.reviewCount ?? 0,
       isOpen: computePartnerIsOpen(!!partner.isBlocked, partner.operatingHours),
+      deliveryFeePolicy: {
+        mode: feeConfig.mode,
+        fixedFee: feeConfig.fixedFee,
+        maxFee: feeConfig.maxFee,
+        label: storeDeliveryFeePolicyLabel(feeConfig),
+      },
     };
 
     const banners = await query<{ id: string; imageUrl: string; title: string | null; linkUrl: string | null }>(
@@ -279,7 +298,9 @@ export class StorePublicService {
   // ============================================
   async createOrder(slug: string, dto: CreateStoreOrderDto) {
     const partner = await queryOne<any>(
-      `SELECT id, latitude, longitude, "isBlocked", "operatingHours" FROM "Partner" WHERE slug = $1`,
+      `SELECT id, latitude, longitude, "isBlocked", "operatingHours",
+              store_delivery_fee_mode, store_delivery_fee_max, store_delivery_fee_fixed
+       FROM "Partner" WHERE slug = $1`,
       [slug]
     );
     if (!partner) throw new Error('Loja não encontrada');
@@ -424,24 +445,33 @@ export class StorePublicService {
       couponCode = result.coupon.code;
     }
 
-    // Taxa de entrega: cotada no servidor quando há coordenadas do cliente.
+    // Taxa de entrega conforme política da loja (fixo / distância com teto / automático).
     let deliveryFee = 0;
-    if (
+    const feeConfig = parseStoreDeliveryFeeConfig(partner);
+
+    if (feeConfig.mode === 'fixed') {
+      const quoted = await storeDeliveryFeeService.quote(feeConfig, {
+        storeLatitude: partner.latitude,
+        storeLongitude: partner.longitude,
+        deliveryLatitude: customerLatitude ?? partner.latitude,
+        deliveryLongitude: customerLongitude ?? partner.longitude,
+      });
+      deliveryFee = quoted.deliveryFee;
+    } else if (
       customerLatitude != null &&
       customerLongitude != null &&
       typeof partner.latitude === 'number' &&
       typeof partner.longitude === 'number'
     ) {
       try {
-        const quote = await pricingService.calculateQuote({
+        const quoted = await storeDeliveryFeeService.quote(feeConfig, {
           storeLatitude: partner.latitude,
           storeLongitude: partner.longitude,
           deliveryLatitude: customerLatitude,
           deliveryLongitude: customerLongitude,
         });
-        deliveryFee = quote.deliveryFee;
+        deliveryFee = quoted.deliveryFee;
       } catch {
-        // Cotação indisponível: segue sem taxa (será resolvida no checkout/pagamento).
         deliveryFee = 0;
       }
     }
@@ -640,6 +670,50 @@ export class StorePublicService {
       hasDelivery: !!order.deliveryOrderId,
       tracking,
       reviewed: !!review,
+    };
+  }
+
+  /** Cotação pública de frete (vitrine) — recalculada no servidor. */
+  async quoteDeliveryFee(
+    slug: string,
+    deliveryLatitude: number,
+    deliveryLongitude: number
+  ) {
+    const partner = await queryOne<any>(
+      `SELECT latitude, longitude, "isBlocked", "operatingHours",
+              store_delivery_fee_mode, store_delivery_fee_max, store_delivery_fee_fixed
+       FROM "Partner" WHERE slug = $1`,
+      [slug]
+    );
+    if (!partner) throw new Error('Loja não encontrada');
+    if (!computePartnerIsOpen(!!partner.isBlocked, partner.operatingHours)) {
+      throw new Error('Loja fechada no momento');
+    }
+    if (
+      typeof partner.latitude !== 'number' ||
+      typeof partner.longitude !== 'number' ||
+      !Number.isFinite(deliveryLatitude) ||
+      !Number.isFinite(deliveryLongitude)
+    ) {
+      throw new Error('Coordenadas inválidas para cotação de frete');
+    }
+
+    const feeConfig = parseStoreDeliveryFeeConfig(partner);
+    const quote = await storeDeliveryFeeService.quote(feeConfig, {
+      storeLatitude: partner.latitude,
+      storeLongitude: partner.longitude,
+      deliveryLatitude,
+      deliveryLongitude,
+    });
+
+    return {
+      quote,
+      policy: {
+        mode: feeConfig.mode,
+        fixedFee: feeConfig.fixedFee,
+        maxFee: feeConfig.maxFee,
+        label: storeDeliveryFeePolicyLabel(feeConfig),
+      },
     };
   }
 

@@ -165,6 +165,8 @@ export interface AuthRequest {
 
 export type StoreManagementMode = 'self' | 'giro_managed';
 
+export type StoreDeliveryFeeMode = 'fixed' | 'distance_capped' | 'distance';
+
 export interface CreateUserDto {
   name: string;
   email: string;
@@ -364,6 +366,12 @@ export interface Partner {
   storeDescription?: string | null; // Descrição curta exibida na vitrine
   /** self = lojista gerencia; giro_managed = marketing bloqueado para lojista */
   storeManagementMode?: StoreManagementMode;
+  /** fixed | distance_capped | distance — política de frete da vitrine */
+  storeDeliveryFeeMode?: StoreDeliveryFeeMode | null;
+  /** Teto máximo de frete (R$) — usado em distance_capped */
+  storeDeliveryFeeMax?: number | null;
+  /** Frete fixo (R$) — usado quando mode = fixed */
+  storeDeliveryFeeFixed?: number | null;
   createdAt: Date;
   updatedAt: Date;
   /** prepaid | postpaid_pix | authorize_capture — política de cobrança ao cliente (Asaas). */
@@ -600,6 +608,9 @@ export interface UpdatePartnerDto {
   operatingHours?: any;
   isBlocked?: boolean;
   storeManagementMode?: StoreManagementMode;
+  storeDeliveryFeeMode?: StoreDeliveryFeeMode;
+  storeDeliveryFeeMax?: number | null;
+  storeDeliveryFeeFixed?: number | null;
 }
 
 export interface CreatePartnerPaymentDto {

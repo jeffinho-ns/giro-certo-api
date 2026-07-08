@@ -66,6 +66,18 @@ export class StorePublicController {
     }
   };
 
+  quoteDeliveryFee = async (req: Request, res: Response) => {
+    try {
+      const slug = this.param(req, 'slug');
+      const lat = Number(req.body?.deliveryLatitude);
+      const lng = Number(req.body?.deliveryLongitude);
+      const result = await publicService.quoteDeliveryFee(slug, lat, lng);
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  };
+
   checkout = async (req: Request, res: Response) => {
     try {
       const token = this.param(req, 'token');

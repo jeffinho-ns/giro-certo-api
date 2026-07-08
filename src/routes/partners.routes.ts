@@ -111,6 +111,38 @@ function parseSafePartnerMeUpdate(body: unknown): UpdatePartnerDto {
     data.maxServiceRadius = n;
   }
 
+  if (raw.storeDeliveryFeeMode !== undefined) {
+    const m = String(raw.storeDeliveryFeeMode);
+    if (m !== 'fixed' && m !== 'distance_capped' && m !== 'distance') {
+      throw new Error('storeDeliveryFeeMode inválido (fixed, distance_capped ou distance)');
+    }
+    data.storeDeliveryFeeMode = m as UpdatePartnerDto['storeDeliveryFeeMode'];
+  }
+
+  if (raw.storeDeliveryFeeMax !== undefined) {
+    if (raw.storeDeliveryFeeMax === null || raw.storeDeliveryFeeMax === '') {
+      data.storeDeliveryFeeMax = null;
+    } else {
+      const n = Number(raw.storeDeliveryFeeMax);
+      if (!Number.isFinite(n) || n < 0 || n > 500) {
+        throw new Error('storeDeliveryFeeMax inválido');
+      }
+      data.storeDeliveryFeeMax = Math.round(n * 100) / 100;
+    }
+  }
+
+  if (raw.storeDeliveryFeeFixed !== undefined) {
+    if (raw.storeDeliveryFeeFixed === null || raw.storeDeliveryFeeFixed === '') {
+      data.storeDeliveryFeeFixed = null;
+    } else {
+      const n = Number(raw.storeDeliveryFeeFixed);
+      if (!Number.isFinite(n) || n < 0 || n > 500) {
+        throw new Error('storeDeliveryFeeFixed inválido');
+      }
+      data.storeDeliveryFeeFixed = Math.round(n * 100) / 100;
+    }
+  }
+
   if (raw.operatingHours !== undefined) {
     if (raw.operatingHours === null) {
       data.operatingHours = null;
@@ -151,10 +183,13 @@ function parseSafePartnerMeUpdate(body: unknown): UpdatePartnerDto {
     data.phone === undefined &&
     data.avgPreparationTime === undefined &&
     data.maxServiceRadius === undefined &&
-    data.operatingHours === undefined
+    data.operatingHours === undefined &&
+    data.storeDeliveryFeeMode === undefined &&
+    data.storeDeliveryFeeMax === undefined &&
+    data.storeDeliveryFeeFixed === undefined
   ) {
     throw new Error(
-      'Informe ao menos um campo: operatingHours, avgPreparationTime, maxServiceRadius ou phone'
+      'Informe ao menos um campo: operatingHours, avgPreparationTime, maxServiceRadius, phone ou política de frete'
     );
   }
 

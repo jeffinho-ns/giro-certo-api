@@ -21,6 +21,7 @@ const orderLimiter = rateLimit({ windowMs: 60_000, max: 10, keyPrefix: 'store-pu
 
 router.get('/public/:slug', readLimiter, publicCtrl.getStorefront);
 router.post('/public/:slug/coupon/preview', readLimiter, publicCtrl.previewCoupon);
+router.post('/public/:slug/delivery-quote', readLimiter, publicCtrl.quoteDeliveryFee);
 router.post('/public/:slug/orders', orderLimiter, publicCtrl.createOrder);
 router.post('/public/orders/:token/checkout', orderLimiter, publicCtrl.checkout);
 router.post('/public/orders/:token/review', orderLimiter, publicCtrl.submitReview);
