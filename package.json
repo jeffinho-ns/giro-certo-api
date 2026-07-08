@@ -29,7 +29,8 @@
     "db:migrate:store-order-payment": "node scripts/run-store-order-payment-migration.js",
     "db:migrate:store-appearance": "node scripts/run-store-appearance-migration.js",
     "db:migrate:store-coupons": "node scripts/run-store-coupons-migration.js",
-    "db:migrate:store-reviews": "node scripts/run-store-reviews-migration.js"
+    "db:migrate:store-reviews": "node scripts/run-store-reviews-migration.js",
+    "db:migrate:store-admin-managed": "node scripts/run-store-admin-managed-migration.js"
   },
   "keywords": [
     "api",

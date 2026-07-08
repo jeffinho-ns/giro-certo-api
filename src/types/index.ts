@@ -159,7 +159,11 @@ export enum StoreOrderStatus {
 export interface AuthRequest {
   userId?: string;
   user?: any;
+  actAsPartnerId?: string;
+  adminActAs?: boolean;
 }
+
+export type StoreManagementMode = 'self' | 'giro_managed';
 
 export interface CreateUserDto {
   name: string;
@@ -358,6 +362,8 @@ export interface Partner {
   storeCoverUrl?: string | null; // Imagem de capa (hero) da vitrine
   storeThemeColor?: string | null; // Cor de destaque (hex) da vitrine
   storeDescription?: string | null; // Descrição curta exibida na vitrine
+  /** self = lojista gerencia; giro_managed = marketing bloqueado para lojista */
+  storeManagementMode?: StoreManagementMode;
   createdAt: Date;
   updatedAt: Date;
   /** prepaid | postpaid_pix | authorize_capture — política de cobrança ao cliente (Asaas). */
@@ -593,6 +599,7 @@ export interface UpdatePartnerDto {
   avgPreparationTime?: number;
   operatingHours?: any;
   isBlocked?: boolean;
+  storeManagementMode?: StoreManagementMode;
 }
 
 export interface CreatePartnerPaymentDto {

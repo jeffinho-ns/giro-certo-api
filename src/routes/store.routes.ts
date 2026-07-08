@@ -1,12 +1,17 @@
 import { Router } from 'express';
-import { authenticateToken, requireLojista } from '../middleware/auth';
+import { authenticateToken, requireModerator } from '../middleware/auth';
 import { rateLimit } from '../middleware/rate-limit';
-import { StoreManageController } from '../controllers/store-manage.controller';
 import { StorePublicController } from '../controllers/store-public.controller';
+import { StoreAdminController } from '../controllers/store-admin.controller';
+import {
+  requireStoreManageAccess,
+  setActAsPartnerFromParam,
+} from '../middleware/store-manage-auth';
+import { registerStoreManageRoutes } from '../utils/register-store-manage-routes';
 
 const router = Router();
-const manage = new StoreManageController();
 const publicCtrl = new StorePublicController();
+const adminCtrl = new StoreAdminController();
 
 // ============================================
 // /api/store/public/* — vitrine pública (SEM auth), com rate limiting
@@ -24,58 +29,27 @@ router.get('/public/places/autocomplete', readLimiter, publicCtrl.autocompletePl
 router.get('/public/places/details', readLimiter, publicCtrl.placeDetails);
 
 // ============================================
-// /api/store/manage/* — área do LOJISTA
-// Toda rota: autenticação + ser lojista (partnerId). Escopo = própria loja.
-// (As rotas públicas /api/store/public/* entram no Passo 3.)
+// /api/store/admin/* — painel admin da loja
 // ============================================
-router.use('/manage', authenticateToken, requireLojista);
+router.get('/admin/templates', authenticateToken, requireModerator, adminCtrl.listTemplates);
+router.get('/admin/:partnerId/readiness', authenticateToken, requireModerator, adminCtrl.getReadiness);
+router.get('/admin/:partnerId/stats', authenticateToken, requireModerator, adminCtrl.getStats);
+router.post('/admin/:partnerId/apply-template', authenticateToken, requireModerator, adminCtrl.applyTemplate);
+router.get('/admin/:partnerId/audit-log', authenticateToken, requireModerator, adminCtrl.getAuditLog);
 
-// --- Categorias ---
-router.get('/manage/categories', manage.listCategories);
-router.post('/manage/categories', manage.createCategory);
-router.put('/manage/categories/:id', manage.updateCategory);
-router.delete('/manage/categories/:id', manage.deleteCategory);
+// Espelho admin das rotas de gestão (/api/store/admin/:partnerId/manage/*)
+router.use(
+  '/admin/:partnerId/manage',
+  authenticateToken,
+  requireModerator,
+  setActAsPartnerFromParam('partnerId')
+);
+registerStoreManageRoutes(router, '/admin/:partnerId/manage', { blockManagedWrites: false });
 
-// --- Produtos (com variações) ---
-router.get('/manage/products', manage.listProducts);
-router.get('/manage/products/:id', manage.getProduct);
-router.post('/manage/products', manage.createProduct);
-router.put('/manage/products/:id', manage.updateProduct);
-router.delete('/manage/products/:id', manage.deleteProduct);
-
-// --- Grupos de opção (variações) ---
-router.post('/manage/products/:productId/option-groups', manage.createOptionGroup);
-router.put('/manage/option-groups/:id', manage.updateOptionGroup);
-router.delete('/manage/option-groups/:id', manage.deleteOptionGroup);
-
-// --- Opções dentro de um grupo ---
-router.post('/manage/option-groups/:groupId/options', manage.createOption);
-router.put('/manage/options/:id', manage.updateOption);
-router.delete('/manage/options/:id', manage.deleteOption);
-
-// --- Banners / promoções ---
-router.get('/manage/banners', manage.listBanners);
-router.post('/manage/banners', manage.createBanner);
-router.put('/manage/banners/:id', manage.updateBanner);
-router.delete('/manage/banners/:id', manage.deleteBanner);
-
-// --- Avaliações recebidas ---
-router.get('/manage/reviews', manage.listReviews);
-
-// --- Cupons de desconto ---
-router.get('/manage/coupons', manage.listCoupons);
-router.post('/manage/coupons', manage.createCoupon);
-router.put('/manage/coupons/:id', manage.updateCoupon);
-router.delete('/manage/coupons/:id', manage.deleteCoupon);
-
-// --- Personalização da vitrine ---
-router.get('/manage/appearance', manage.getAppearance);
-router.put('/manage/appearance', manage.updateAppearance);
-
-// --- Pedidos da loja virtual (aceitar = ponte para entrega) ---
-router.get('/manage/orders', manage.listOrders);
-router.get('/manage/orders/:id', manage.getOrder);
-router.post('/manage/orders/:id/accept', manage.acceptOrder);
-router.post('/manage/orders/:id/reject', manage.rejectOrder);
+// ============================================
+// /api/store/manage/* — área do LOJISTA (ou admin com X-Act-As-Partner)
+// ============================================
+router.use('/manage', authenticateToken, requireStoreManageAccess);
+registerStoreManageRoutes(router, '/manage', { blockManagedWrites: true });
 
 export default router;

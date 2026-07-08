@@ -8,6 +8,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 export interface AuthRequest extends Request {
   userId?: string;
   user?: any;
+  actAsPartnerId?: string;
+  adminActAs?: boolean;
 }
 
 declare global {

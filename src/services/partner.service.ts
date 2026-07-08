@@ -457,6 +457,15 @@ export class PartnerService {
       paramIndex++;
     }
 
+    if (data.storeManagementMode !== undefined) {
+      if (data.storeManagementMode !== 'self' && data.storeManagementMode !== 'giro_managed') {
+        throw new Error('storeManagementMode inválido (use self ou giro_managed)');
+      }
+      updateFields.push(`"storeManagementMode" = $${paramIndex}`);
+      params.push(data.storeManagementMode);
+      paramIndex++;
+    }
+
     if (updateFields.length === 0) {
       throw new Error('Nenhum campo para atualizar');
     }
