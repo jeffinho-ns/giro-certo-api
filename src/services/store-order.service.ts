@@ -4,6 +4,7 @@ import { DeliveryOrder, StoreOrder, StoreOrderStatus } from '../types';
 import { asaasRefundPayment, isAsaasConfigured } from './asaas.service';
 import { ssePublishStoreOrder } from '../utils/socket-events';
 import { ssePublish } from '../utils/sse-hub';
+import { StoreOrderSettlementBridgeService } from './store-order-settlement-bridge.service';
 
 /**
  * Gestão dos pedidos da loja virtual pelo LOJISTA (escopado por partnerId).
@@ -12,6 +13,7 @@ import { ssePublish } from '../utils/sse-hub';
  */
 export class StoreOrderService {
   private readonly deliveryService = new DeliveryService();
+  private readonly settlementBridge = new StoreOrderSettlementBridgeService();
 
   /** Campos seguros do pedido para o lojista (sem payload de webhook cru). */
   private readonly listColumns = `
@@ -35,13 +37,14 @@ export class StoreOrderService {
     }
     const limit = Math.min(Math.max(filters.limit ?? 50, 1), 200);
     vals.push(limit);
-    return query<StoreOrder>(
+    const rows = await query<StoreOrder>(
       `SELECT ${this.listColumns} FROM "StoreOrder"
        WHERE ${conditions.join(' AND ')}
        ORDER BY "createdAt" DESC
        LIMIT $${idx}`,
       vals
     );
+    return rows.map((row) => this.withPickupCode(row));
   }
 
   async getOrder(partnerId: string, id: string): Promise<StoreOrder | null> {
@@ -56,7 +59,21 @@ export class StoreOrderService {
       [id]
     );
     (order as any).items = items;
-    return order;
+    return this.withPickupCode(order);
+  }
+
+  /** Código de 4 dígitos para o lojista passar ao motoboy na retirada (após despacho). */
+  private withPickupCode<T extends StoreOrder>(
+    order: T
+  ): T & { pickupCode: string | null } {
+    const deliveryOrderId = order.deliveryOrderId;
+    if (!deliveryOrderId) {
+      return { ...order, pickupCode: null };
+    }
+    return {
+      ...order,
+      pickupCode: this.deliveryService.getStorePickupCode(deliveryOrderId),
+    };
   }
 
   /**
@@ -140,6 +157,19 @@ export class StoreOrderService {
       `SELECT ${this.listColumns} FROM "StoreOrder" WHERE id = $1`,
       [order.id]
     );
+
+    try {
+      await this.settlementBridge.ensureRecorded({
+        storeOrder: order,
+        deliveryOrderId,
+      });
+    } catch (bridgeErr: any) {
+      console.error(
+        '[StoreOrderSettlementBridge] Falha ao registrar repasse:',
+        order.id,
+        bridgeErr?.message ?? bridgeErr
+      );
+    }
 
     if (storeOrder?.trackingToken) {
       ssePublishStoreOrder(storeOrder.trackingToken, 'store_order:update', {

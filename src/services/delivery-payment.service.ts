@@ -254,6 +254,19 @@ export class DeliveryPaymentService {
       return;
     }
 
+    const storeOrderPaid = await queryOne<{ c: number }>(
+      `SELECT COUNT(*)::int AS c
+       FROM "DeliveryOrder" d
+       INNER JOIN "StoreOrder" so ON so.id = d."storeOrderId"
+       WHERE d.id = $1
+         AND so."paidAt" IS NOT NULL
+         AND so.status NOT IN ('awaiting_payment', 'cancelled', 'rejected')`,
+      [orderId]
+    );
+    if ((storeOrderPaid?.c ?? 0) > 0) {
+      return;
+    }
+
     const message =
       context === 'dispatch'
         ? 'Confirme o pagamento do cliente antes de chamar motociclistas (modo pré-pago da loja).'

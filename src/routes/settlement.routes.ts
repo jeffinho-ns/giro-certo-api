@@ -3,11 +3,13 @@ import { authenticateToken, AuthRequest, requireAdmin } from '../middleware/auth
 import { DeliverySettlementLedgerService } from '../services/delivery-settlement-ledger.service';
 import { DeliverySettlementBatchService } from '../services/delivery-settlement-batch.service';
 import { DeliveryPaymentService } from '../services/delivery-payment.service';
+import { StoreOrderSettlementBridgeService } from '../services/store-order-settlement-bridge.service';
 
 const router = Router();
 const settlementLedgerService = new DeliverySettlementLedgerService();
 const settlementBatchService = new DeliverySettlementBatchService();
 const deliveryPaymentService = new DeliveryPaymentService();
+const storeOrderSettlementBridge = new StoreOrderSettlementBridgeService();
 
 /** Resumo execuativo: repasses pendentes agrupados (ainda sem lote). */
 router.get(
@@ -145,6 +147,26 @@ router.post(
       const msg = e?.message || 'Falha ao executar transferência';
       const code = msg.includes('desativadas') || msg.includes('não configurada') ? 503 : 400;
       res.status(code).json({ error: msg });
+    }
+  }
+);
+
+/** Registra no livro pedidos da vitrine já pagos/despachados sem linha de repasse. */
+router.post(
+  '/reconcile/store-orders',
+  authenticateToken,
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const lim = req.body?.limit != null ? parseInt(String(req.body.limit), 10) : 200;
+      const result = await storeOrderSettlementBridge.backfillMissing(
+        Number.isFinite(lim) ? lim : 200
+      );
+      res.json({ ok: true, ...result });
+    } catch (e: any) {
+      res.status(400).json({
+        error: e?.message || 'Erro ao reconciliar pedidos da loja virtual',
+      });
     }
   }
 );
