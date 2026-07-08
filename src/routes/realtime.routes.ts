@@ -34,7 +34,9 @@ router.get('/stream', async (req: Request, res: Response) => {
 
     const channels: string[] = [`user:${user.id}`];
     if (user.partnerId) channels.push(`store:${user.partnerId}`);
-    if (user.role === UserRole.ADMIN) channels.push('role:admin');
+    if (user.role === UserRole.ADMIN || user.role === UserRole.MODERATOR) {
+      channels.push('role:admin');
+    }
 
     const orderId = String(req.query.orderId ?? '').trim();
     if (orderId) {

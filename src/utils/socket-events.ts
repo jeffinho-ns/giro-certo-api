@@ -65,7 +65,7 @@ export async function canJoinOrderTrackingRoom(
   orderId: string
 ): Promise<boolean> {
   if (!orderId || orderId.trim().length === 0) return false;
-  if (user.role === UserRole.ADMIN) return true;
+  if (user.role === UserRole.ADMIN || user.role === UserRole.MODERATOR) return true;
   const order = await queryOne<{ storeId: string; riderId: string | null }>(
     `SELECT "storeId", "riderId"
      FROM "DeliveryOrder"

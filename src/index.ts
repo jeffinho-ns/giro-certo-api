@@ -172,7 +172,7 @@ io.on('connection', (socket) => {
     if (user.partnerId) {
       socket.join(`store:${user.partnerId}`);
     }
-    if (user.role === UserRole.ADMIN) {
+    if (user.role === UserRole.ADMIN || user.role === UserRole.MODERATOR) {
       socket.join('role:admin');
     }
     void deliveryService

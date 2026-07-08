@@ -492,6 +492,14 @@ router.put('/me/location', authenticateToken, async (req: AuthRequest, res: Resp
         status: activeOrder.status,
         at: Date.now(),
       });
+      ioEmitToRoom(req.app, 'role:admin', 'rider:location:update', {
+        userId: req.userId,
+        lat: data.latitude,
+        lng: data.longitude,
+        orderId: activeOrder.id,
+        status: activeOrder.status,
+        at: Date.now(),
+      });
     }
 
     if (routeHistoryOrderId) {
