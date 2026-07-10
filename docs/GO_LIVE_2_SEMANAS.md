@@ -3,6 +3,8 @@
 > Prazo: **14 dias**. Público prioritário: **app (riders + lojistas) + admin**.  
 > Cliente final: **só pela vitrine web** (`giro-certo-next`).  
 > **Package ID / Firebase / assinatura de loja: só no final** — até lá, testes em telefones de casa (debug).
+>
+> **Dia 0 (deploy produção):** [`GO_LIVE_DIA_0.md`](./GO_LIVE_DIA_0.md) · Envs: [`check-production-env.md`](./check-production-env.md)
 
 ---
 
@@ -46,16 +48,16 @@
 
 ### Infra leve
 - [x] Health check com ping no banco (`GET /health`)
-- [x] Smoke test em casa (`docs/SMOKE_TEST_CASA.md`)
+- [x] Smoke test em casa (`docs/SMOKE_TEST_CASA.md`) — **concluído**
 
 ---
 
 ## Semana 2 — Testes em casa + polimento
 
-### Testes controlados (agora)
-- [ ] Seguir `SMOKE_TEST_CASA.md` nos telefones
-- [ ] Admin: criar lojista → aprovar delivery → torre
-- [ ] Loop completo: vitrine → PIX → aceite → rider → mapa
+### Testes controlados
+- [x] Seguir `SMOKE_TEST_CASA.md` nos telefones — **concluído**
+- [x] Admin: criar lojista → aprovar delivery → torre
+- [x] Loop completo: vitrine → PIX → aceite → rider → mapa
 
 ### Ainda opcional antes do “final”
 - [x] Estorno automático Asaas na recusa de pedido pago
@@ -88,8 +90,10 @@ Ver `giro-certo-next/docs/ADMIN_GO_LIVE.md`.
 
 ## Critério de sucesso (teste em casa)
 
-- [ ] Rider social: posta, garagem, manual
-- [ ] Entregador: online → oferta → entrega com PIN
-- [ ] Lojista: horário, produtos, aceita pedido da vitrine
-- [ ] Admin: aprova delivery, vê torre
-- [ ] Cliente no celular: compra, PIX, mapa do rider
+- [x] Rider social: posta, garagem, manual
+- [x] Entregador: online → oferta → entrega com PIN
+- [x] Lojista: horário, produtos, aceita pedido da vitrine
+- [x] Admin: aprova delivery, vê torre
+- [x] Cliente no celular: compra, PIX, mapa do rider
+
+> Próximo passo operacional: deploy piloto seguindo [`GO_LIVE_DIA_0.md`](./GO_LIVE_DIA_0.md).
