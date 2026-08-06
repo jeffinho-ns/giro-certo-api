@@ -138,12 +138,34 @@ export enum UserType {
   LOJISTA = 'LOJISTA',
 }
 
+// ============================================
+// Loja Virtual — status do pedido de compra (StoreOrder)
+// awaiting_payment -> paid -> accepted_by_store -> dispatched -> in_delivery -> completed
+// (+ cancelled / rejected)
+// ============================================
+export enum StoreOrderStatus {
+  awaiting_payment = 'awaiting_payment',
+  paid = 'paid',
+  accepted_by_store = 'accepted_by_store',
+  dispatched = 'dispatched',
+  in_delivery = 'in_delivery',
+  completed = 'completed',
+  cancelled = 'cancelled',
+  rejected = 'rejected',
+}
+
 // Interfaces de Request
 // Nota: Certifique-se de ter o @types/express instalado para estender o Request
 export interface AuthRequest {
   userId?: string;
   user?: any;
+  actAsPartnerId?: string;
+  adminActAs?: boolean;
 }
+
+export type StoreManagementMode = 'self' | 'giro_managed';
+
+export type StoreDeliveryFeeMode = 'fixed' | 'distance_capped' | 'distance';
 
 export interface CreateUserDto {
   name: string;
@@ -313,6 +335,8 @@ export interface MaintenanceLog {
 export interface Partner {
   id: string;
   name: string;
+  /** Identificador público na URL da vitrine (/loja/<slug>). */
+  slug?: string | null;
   type: PartnerType;
   address: string;
   latitude: number;
@@ -336,6 +360,18 @@ export interface Partner {
   operatingHours: any | null; // JSON: {"monday": {"open": "08:00", "close": "22:00"}, ...}
   // Status
   isBlocked: boolean; // Bloqueado se inadimplente
+  // Personalização da vitrine pública (loja virtual)
+  storeCoverUrl?: string | null; // Imagem de capa (hero) da vitrine
+  storeThemeColor?: string | null; // Cor de destaque (hex) da vitrine
+  storeDescription?: string | null; // Descrição curta exibida na vitrine
+  /** self = lojista gerencia; giro_managed = marketing bloqueado para lojista */
+  storeManagementMode?: StoreManagementMode;
+  /** fixed | distance_capped | distance — política de frete da vitrine */
+  storeDeliveryFeeMode?: StoreDeliveryFeeMode | null;
+  /** Teto máximo de frete (R$) — usado em distance_capped */
+  storeDeliveryFeeMax?: number | null;
+  /** Frete fixo (R$) — usado quando mode = fixed */
+  storeDeliveryFeeFixed?: number | null;
   createdAt: Date;
   updatedAt: Date;
   /** prepaid | postpaid_pix | authorize_capture — política de cobrança ao cliente (Asaas). */
@@ -389,6 +425,8 @@ export interface DeliveryOrder {
   inProgressAt: Date | null;
   completedAt: Date | null;
   cancelledAt: Date | null;
+  /** Pedido de compra de origem (loja virtual), quando aplicável. */
+  storeOrderId?: string | null;
 }
 
 export interface Wallet {
@@ -569,6 +607,10 @@ export interface UpdatePartnerDto {
   avgPreparationTime?: number;
   operatingHours?: any;
   isBlocked?: boolean;
+  storeManagementMode?: StoreManagementMode;
+  storeDeliveryFeeMode?: StoreDeliveryFeeMode;
+  storeDeliveryFeeMax?: number | null;
+  storeDeliveryFeeFixed?: number | null;
 }
 
 export interface CreatePartnerPaymentDto {
@@ -687,4 +729,291 @@ export interface UpdateDeliveryRegistrationStatusDto {
   approvedBy?: string;
   rejectionReason?: string;
   adminNotes?: string;
+}
+
+// ============================================
+// Tipos para Loja Virtual (catálogo, pedido, itens)
+// Fonte de verdade: PLANO_LOJA_VIRTUAL.md (Seção 6)
+// ============================================
+
+// --- Modelos de banco ---
+
+export interface ProductCategory {
+  id: string;
+  partnerId: string;
+  name: string;
+  sortOrder: number;
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Product {
+  id: string;
+  partnerId: string;
+  categoryId: string | null;
+  name: string;
+  description: string | null;
+  basePrice: number;
+  photoUrl: string | null;
+  active: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+  // Relacionamentos (populados via JOIN/montagem)
+  optionGroups?: ProductOptionGroup[];
+}
+
+export interface ProductOptionGroup {
+  id: string;
+  productId: string;
+  name: string;
+  minSelect: number;
+  maxSelect: number;
+  required: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+  // Relacionamentos
+  options?: ProductOption[];
+}
+
+export interface ProductOption {
+  id: string;
+  optionGroupId: string;
+  name: string;
+  priceDelta: number;
+  active: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface StoreBanner {
+  id: string;
+  partnerId: string;
+  imageUrl: string;
+  title: string | null;
+  linkUrl: string | null;
+  discount: number | null;
+  startsAt: Date | null;
+  endsAt: Date | null;
+  active: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface StoreCustomer {
+  id: string;
+  name: string;
+  phone: string;
+  address: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Snapshot de uma variação escolhida (gravado no item do pedido). */
+export interface SelectedOptionSnapshot {
+  groupName: string;
+  optionName: string;
+  priceDelta: number;
+}
+
+export interface StoreOrder {
+  id: string;
+  partnerId: string;
+  customerId: string | null;
+  // Snapshot do cliente
+  customerName: string;
+  customerPhone: string;
+  customerAddress: string;
+  customerCpf: string | null;
+  customerLatitude: number | null;
+  customerLongitude: number | null;
+  notes: string | null;
+  // Valores (recalculados no servidor)
+  subtotal: number;
+  deliveryFee: number;
+  total: number;
+  currency: string;
+  // Ciclo de vida
+  status: StoreOrderStatus;
+  paymentId: string | null;
+  deliveryOrderId: string | null;
+  trackingToken: string;
+  // Pagamento (Asaas)
+  asaasPaymentId: string | null;
+  asaasCustomerId: string | null;
+  invoiceUrl: string | null;
+  billingType: string | null;
+  lastWebhookEvent: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  paidAt: Date | null;
+  acceptedAt: Date | null;
+  dispatchedAt: Date | null;
+  completedAt: Date | null;
+  cancelledAt: Date | null;
+  // Relacionamentos
+  items?: StoreOrderItem[];
+}
+
+export interface StoreOrderItem {
+  id: string;
+  storeOrderId: string;
+  productId: string | null;
+  // Snapshot do item
+  name: string;
+  unitPrice: number;
+  quantity: number;
+  selectedOptions: SelectedOptionSnapshot[];
+  lineTotal: number;
+  notes: string | null;
+  createdAt: Date;
+}
+
+// --- DTOs: catálogo (área do lojista) ---
+
+export interface CreateProductCategoryDto {
+  name: string;
+  sortOrder?: number;
+  active?: boolean;
+}
+
+export interface UpdateProductCategoryDto {
+  name?: string;
+  sortOrder?: number;
+  active?: boolean;
+}
+
+export interface CreateProductOptionDto {
+  name: string;
+  priceDelta?: number;
+  active?: boolean;
+  sortOrder?: number;
+}
+
+export interface CreateProductOptionGroupDto {
+  name: string;
+  minSelect?: number;
+  maxSelect?: number;
+  required?: boolean;
+  sortOrder?: number;
+  options?: CreateProductOptionDto[];
+}
+
+export interface CreateProductDto {
+  categoryId?: string | null;
+  name: string;
+  description?: string;
+  basePrice: number;
+  photoUrl?: string;
+  active?: boolean;
+  sortOrder?: number;
+  optionGroups?: CreateProductOptionGroupDto[];
+}
+
+export interface UpdateProductDto {
+  categoryId?: string | null;
+  name?: string;
+  description?: string;
+  basePrice?: number;
+  photoUrl?: string;
+  active?: boolean;
+  sortOrder?: number;
+}
+
+export interface StoreReview {
+  id: string;
+  partnerId: string;
+  storeOrderId: string | null;
+  rating: number;
+  comment: string | null;
+  customerName: string | null;
+  createdAt: Date;
+}
+
+export type CouponDiscountType = 'percent' | 'fixed';
+
+export interface StoreCoupon {
+  id: string;
+  partnerId: string;
+  code: string;
+  discountType: CouponDiscountType;
+  discountValue: number;
+  minSubtotal: number;
+  maxUses: number | null;
+  usedCount: number;
+  active: boolean;
+  expiresAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateStoreCouponDto {
+  code: string;
+  discountType: CouponDiscountType;
+  discountValue: number;
+  minSubtotal?: number;
+  maxUses?: number | null;
+  active?: boolean;
+  expiresAt?: Date | null;
+}
+
+export interface UpdateStoreCouponDto {
+  code?: string;
+  discountType?: CouponDiscountType;
+  discountValue?: number;
+  minSubtotal?: number;
+  maxUses?: number | null;
+  active?: boolean;
+  expiresAt?: Date | null;
+}
+
+export interface CreateStoreBannerDto {
+  imageUrl: string;
+  title?: string;
+  linkUrl?: string;
+  discount?: number;
+  startsAt?: Date;
+  endsAt?: Date;
+  active?: boolean;
+  sortOrder?: number;
+}
+
+export interface UpdateStoreBannerDto {
+  imageUrl?: string;
+  title?: string;
+  linkUrl?: string;
+  discount?: number;
+  startsAt?: Date;
+  endsAt?: Date;
+  active?: boolean;
+  sortOrder?: number;
+}
+
+// --- DTOs: pedido (área pública) ---
+
+/** Item enviado pelo cliente no checkout. Apenas referências; o servidor recalcula preços. */
+export interface CreateStoreOrderItemDto {
+  productId: string;
+  quantity: number;
+  /** IDs das opções escolhidas (validadas e precificadas no servidor). */
+  selectedOptionIds?: string[];
+  notes?: string;
+}
+
+export interface CreateStoreOrderDto {
+  customerName: string;
+  customerPhone: string;
+  customerAddress: string;
+  /** CPF/CNPJ do pagador (somente dígitos ou formatado) — exigido pelo Asaas no checkout. */
+  customerCpf?: string;
+  customerLatitude?: number;
+  customerLongitude?: number;
+  notes?: string;
+  /** Código de cupom (validado e precificado no servidor). */
+  couponCode?: string;
+  items: CreateStoreOrderItemDto[];
 }

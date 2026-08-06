@@ -8,6 +8,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 export interface AuthRequest extends Request {
   userId?: string;
   user?: any;
+  actAsPartnerId?: string;
+  adminActAs?: boolean;
 }
 
 declare global {
@@ -81,6 +83,25 @@ export function requireModerator(
 ) {
   if (!req.user || (req.user.role !== UserRole.ADMIN && req.user.role !== UserRole.MODERATOR)) {
     return res.status(403).json({ error: 'Acesso restrito a moderadores e administradores' });
+  }
+  next();
+}
+
+/**
+ * Exige que o usuário seja um LOJISTA (vinculado a uma loja via partnerId).
+ * É a fronteira de autorização das rotas /api/store/manage/* — todo acesso fica
+ * escopado à PRÓPRIA loja (req.user.partnerId). Use sempre após authenticateToken.
+ */
+export function requireLojista(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Não autenticado' });
+  }
+  if (!req.user.partnerId) {
+    return res.status(403).json({ error: 'Acesso restrito a lojistas (sem loja vinculada)' });
   }
   next();
 }

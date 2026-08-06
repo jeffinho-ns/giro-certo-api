@@ -11,6 +11,7 @@ import { ioEmit, ioEmitToRoom } from '../utils/socket-events';
 import { GooglePlacesService } from './google-places.service';
 import { WhatsAppParser } from '../utils/whatsapp-parser';
 import { DeliverySettlementLedgerService } from './delivery-settlement-ledger.service';
+import { syncStoreOrderFromDelivery } from './store-order-sync.service';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
@@ -879,6 +880,16 @@ export class DeliveryService {
     if (updatedOrder) {
       await incrementOpsMetric('order_status_transition_total', 1, `${currentStatus}->${nextStatus}`);
       await this.storeIdempotencyResponse(scope, data.idempotencyKey, updatedOrder);
+      // Espelha status na loja virtual (cliente acompanha pelo trackingToken).
+      try {
+        await syncStoreOrderFromDelivery(
+          updatedOrder.id,
+          nextStatus,
+          (updatedOrder as DeliveryOrder & { storeOrderId?: string | null }).storeOrderId
+        );
+      } catch (err) {
+        console.warn('[store-order-sync]', err);
+      }
     }
     return updatedOrder;
   }

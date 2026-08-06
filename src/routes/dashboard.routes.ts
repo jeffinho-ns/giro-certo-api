@@ -280,6 +280,8 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
   try {
     const vehicleType = req.query.vehicleType as string | undefined;
     const hasVerifiedBadge = req.query.hasVerifiedBadge === 'true' ? true : req.query.hasVerifiedBadge === 'false' ? false : undefined;
+    const deliveryOnly =
+      req.query.deliveryOnly === 'true' || req.query.deliveryOnly === '1';
     const radius = req.query.radius ? parseFloat(req.query.radius as string) : undefined;
     const centerLat = req.query.centerLat ? parseFloat(req.query.centerLat as string) : undefined;
     const centerLng = req.query.centerLng ? parseFloat(req.query.centerLng as string) : undefined;
@@ -300,6 +302,15 @@ router.get('/active-riders', authenticateToken, requireModerator, async (req: Au
       whereClause += ` AND u."verificationBadge" = $${paramIndex}`;
       params.push(hasVerifiedBadge);
       paramIndex++;
+    }
+
+    if (deliveryOnly) {
+      whereClause += ` AND u."partnerId" IS NULL
+        AND COALESCE(u."deliveryRiderBlocked", false) = false
+        AND (
+          EXISTS (SELECT 1 FROM "DeliveryRegistration" dr WHERE dr."userId" = u.id)
+          OR u."pilotProfile" = 'TRABALHO'
+        )`;
     }
 
     const riders = await query(

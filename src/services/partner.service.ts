@@ -12,6 +12,11 @@ import {
   UserRole,
 } from '../types';
 import { generateId } from '../utils/id';
+import { uniqueSlug } from '../utils/slug';
+import {
+  parseStoreDeliveryFeeConfig,
+  validateStoreDeliveryFeeConfig,
+} from './store-delivery-fee.service';
 import bcrypt from 'bcryptjs';
 
 export class PartnerService {
@@ -143,6 +148,15 @@ export class PartnerService {
     const partnerId = generateId();
     const email = data.email?.trim();
 
+    // Slug público único para a vitrine (nome separado por hífen).
+    const slug = await uniqueSlug(data.name, async (candidate) => {
+      const row = await queryOne<{ id: string }>(
+        'SELECT id FROM "Partner" WHERE slug = $1',
+        [candidate]
+      );
+      return !!row;
+    });
+
     // Verificar se o email já existe (se fornecido)
     if (email) {
       if (!data.password || data.password.trim().length < 6) {
@@ -164,15 +178,16 @@ export class PartnerService {
       // 1. Criar parceiro
       await client.query(
         `INSERT INTO "Partner" (
-          id, name, type, address, latitude, longitude,
+          id, name, slug, type, address, latitude, longitude,
           phone, email, specialties, "photoUrl",
           cnpj, "companyName", "tradingName", "stateRegistration",
           "maxServiceRadius", "avgPreparationTime", "operatingHours",
           "isBlocked", "createdAt", "updatedAt"
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW(), NOW())`,
         [
           partnerId,
           data.name,
+          slug,
           data.type,
           data.address,
           data.latitude,
@@ -444,6 +459,65 @@ export class PartnerService {
       updateFields.push(`"isBlocked" = $${paramIndex}`);
       params.push(data.isBlocked);
       paramIndex++;
+    }
+
+    if (data.storeManagementMode !== undefined) {
+      if (data.storeManagementMode !== 'self' && data.storeManagementMode !== 'giro_managed') {
+        throw new Error('storeManagementMode inválido (use self ou giro_managed)');
+      }
+      updateFields.push(`"storeManagementMode" = $${paramIndex}`);
+      params.push(data.storeManagementMode);
+      paramIndex++;
+    }
+
+    if (data.storeDeliveryFeeMode !== undefined) {
+      if (
+        data.storeDeliveryFeeMode !== 'fixed' &&
+        data.storeDeliveryFeeMode !== 'distance_capped' &&
+        data.storeDeliveryFeeMode !== 'distance'
+      ) {
+        throw new Error('storeDeliveryFeeMode inválido');
+      }
+      updateFields.push(`"store_delivery_fee_mode" = $${paramIndex}`);
+      params.push(data.storeDeliveryFeeMode);
+      paramIndex++;
+    }
+
+    if (data.storeDeliveryFeeMax !== undefined) {
+      updateFields.push(`"store_delivery_fee_max" = $${paramIndex}`);
+      params.push(data.storeDeliveryFeeMax);
+      paramIndex++;
+    }
+
+    if (data.storeDeliveryFeeFixed !== undefined) {
+      updateFields.push(`"store_delivery_fee_fixed" = $${paramIndex}`);
+      params.push(data.storeDeliveryFeeFixed);
+      paramIndex++;
+    }
+
+    if (
+      data.storeDeliveryFeeMode !== undefined ||
+      data.storeDeliveryFeeMax !== undefined ||
+      data.storeDeliveryFeeFixed !== undefined
+    ) {
+      const current = await queryOne<Record<string, unknown>>(
+        'SELECT * FROM "Partner" WHERE id = $1',
+        [partnerId]
+      );
+      if (!current) throw new Error('Parceiro não encontrado');
+      const merged = {
+        store_delivery_fee_mode:
+          data.storeDeliveryFeeMode ?? current.store_delivery_fee_mode ?? 'distance_capped',
+        store_delivery_fee_max:
+          data.storeDeliveryFeeMax !== undefined
+            ? data.storeDeliveryFeeMax
+            : current.store_delivery_fee_max,
+        store_delivery_fee_fixed:
+          data.storeDeliveryFeeFixed !== undefined
+            ? data.storeDeliveryFeeFixed
+            : current.store_delivery_fee_fixed,
+      };
+      validateStoreDeliveryFeeConfig(parseStoreDeliveryFeeConfig(merged));
     }
 
     if (updateFields.length === 0) {

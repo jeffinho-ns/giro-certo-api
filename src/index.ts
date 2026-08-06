@@ -28,16 +28,22 @@ import communitiesRoutes from './routes/communities.routes';
 import mapsRoutes from './routes/maps.routes';
 import webhooksRoutes from './routes/webhooks.routes';
 import settlementRoutes from './routes/settlement.routes';
+import storeRoutes from './routes/store.routes';
+import realtimeRoutes from './routes/realtime.routes';
 import { UserRole } from './types';
 import { DeliveryService } from './services/delivery.service';
 import {
   canJoinOrderTrackingRoom,
+  resolveDeliveryOrderIdByTrackingToken,
   resolveSocketUserFromToken,
 } from './utils/socket-events';
 import { incrementOpsMetric } from './utils/ops-metrics';
 import { persistRiderLocationFromSocketEvent } from './services/rider-location-persist.service';
+import { assertProductionEnv } from './utils/startup-env';
+import { query } from './lib/db';
 
 dotenv.config();
+assertProductionEnv();
 
 const app = express();
 
@@ -76,9 +82,29 @@ app.use(express.json({ limit: process.env.JSON_PAYLOAD_LIMIT || '50mb' }));
 app.use(express.urlencoded({ limit: process.env.JSON_PAYLOAD_LIMIT || '50mb', extended: true }));
 app.use('/uploads', express.static('uploads'));
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Giro Certo API is running' });
+// Health check — ping rápido no PostgreSQL (sem segredos na resposta)
+const HEALTH_DB_TIMEOUT_MS = 3000;
+
+app.get('/health', async (_req, res) => {
+  try {
+    await Promise.race([
+      query('SELECT 1'),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('db_timeout')), HEALTH_DB_TIMEOUT_MS);
+      }),
+    ]);
+    res.status(200).json({
+      status: 'ok',
+      db: 'up',
+      message: 'Giro Certo API is running',
+    });
+  } catch {
+    res.status(503).json({
+      status: 'degraded',
+      db: 'down',
+      message: 'Giro Certo API is running but database is unavailable',
+    });
+  }
 });
 
 // API Routes
@@ -104,6 +130,8 @@ app.use('/api/social', socialRoutes);
 app.use('/api/communities', communitiesRoutes);
 app.use('/api/maps', mapsRoutes);
 app.use('/api/settlement', settlementRoutes);
+app.use('/api/store', storeRoutes);
+app.use('/api/realtime', realtimeRoutes);
 
 // Error handler
 app.use(errorHandler);
@@ -144,7 +172,7 @@ io.on('connection', (socket) => {
     if (user.partnerId) {
       socket.join(`store:${user.partnerId}`);
     }
-    if (user.role === UserRole.ADMIN) {
+    if (user.role === UserRole.ADMIN || user.role === UserRole.MODERATOR) {
       socket.join('role:admin');
     }
     void deliveryService
@@ -175,6 +203,34 @@ io.on('connection', (socket) => {
       return;
     }
     socket.join(`order:${orderId}`);
+    socket.emit('tracking:joined', { orderId });
+  });
+
+  /**
+   * Cliente final (vitrine): entra na sala da entrega só com trackingToken.
+   * Sem JWT. Localização do rider só enquanto a entrega está ativa.
+   */
+  socket.on('tracking:join-by-token', async (data: { trackingToken?: string }) => {
+    const trackingToken = data?.trackingToken;
+    if (!trackingToken || typeof trackingToken !== 'string') {
+      socket.emit('tracking:error', { message: 'Token de acompanhamento inválido' });
+      return;
+    }
+    try {
+      const orderId = await resolveDeliveryOrderIdByTrackingToken(trackingToken);
+      if (!orderId) {
+        void incrementOpsMetric('socket_failures_total', 1, 'join_by_token_forbidden');
+        socket.emit('tracking:error', {
+          message: 'Pedido sem entrega ativa ou token inválido',
+        });
+        return;
+      }
+      socket.join(`order:${orderId}`);
+      socket.emit('tracking:joined', { orderId, via: 'token' });
+    } catch (err) {
+      console.warn('[tracking:join-by-token]', err);
+      socket.emit('tracking:error', { message: 'Falha ao entrar no acompanhamento' });
+    }
   });
 
   socket.on('tracking:leave-order', (data: { orderId?: string }) => {
