@@ -115,10 +115,19 @@ export async function sendPushToUser(
     }
 
     const messaging = admin.messaging(app);
+    const cleanData: Record<string, string> = {};
+    if (data) {
+      for (const [key, value] of Object.entries(data)) {
+        if (value != null && value !== '') {
+          cleanData[key] = String(value);
+        }
+      }
+    }
+
     const message: admin.messaging.MulticastMessage = {
       tokens,
       notification: { title, body },
-      data: data || {},
+      data: cleanData,
       android: {
         priority: 'high',
         notification: {

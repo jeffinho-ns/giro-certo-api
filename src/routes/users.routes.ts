@@ -11,7 +11,7 @@ import { authenticateToken, AuthRequest, requireAdmin, requireModerator } from '
 import { UpdateUserLocationDto, User, Bike, Wallet, UserRole, UserType, PilotProfile } from '../types';
 import { ImageService } from '../services/image.service';
 import { AlertService, AlertType, AlertSeverity } from '../services/alert.service';
-import { registerFcmToken, sendPushToUser } from '../services/fcm.service';
+import { registerFcmToken, sendPushToUser, getFcmTokensForUser } from '../services/fcm.service';
 import { ImageEntityType } from '../types';
 import { generateId } from '../utils/id';
 import { ioEmitToRoom } from '../utils/socket-events';
@@ -793,6 +793,29 @@ router.post('/me/fcm-token', authenticateToken, async (req: AuthRequest, res: Re
     }
     await registerFcmToken(userId, token);
     res.json({ ok: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+/** Envia um push de teste para o utilizador autenticado (diagnóstico FCM na API). */
+router.post('/me/fcm-test', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const tokens = await getFcmTokensForUser(userId);
+    if (tokens.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Nenhum token FCM registado para este utilizador',
+      });
+    }
+    await sendPushToUser(
+      userId,
+      'Teste API Giro Certo',
+      'Se você viu isto, o FCM da API está a funcionar.',
+      { type: 'fcm_test' }
+    );
+    res.json({ ok: true, tokenCount: tokens.length });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
