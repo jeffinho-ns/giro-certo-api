@@ -196,19 +196,43 @@ export async function sendPushToUser(
     const result = await messaging.sendEachForMulticast(message);
     empty.successCount = result.successCount;
     empty.failureCount = result.failureCount;
-    empty.ok = result.failureCount === 0 && result.successCount > 0;
+    // Sucesso parcial é OK: tokens antigos (reinstall) costumam vir NotRegistered.
+    empty.ok = result.successCount > 0;
 
+    const staleTokens: string[] = [];
     result.responses.forEach((r, i) => {
       if (!r.success) {
-        const msg = `${r.error?.code || 'error'}: ${r.error?.message || 'unknown'}`;
+        const code = r.error?.code || 'error';
+        const msg = `${code}: ${r.error?.message || 'unknown'}`;
         empty.errors.push(msg);
         console.error(`[FCM] Falha token[${i}]:`, r.error?.code, r.error?.message);
+        if (
+          code.includes('registration-token-not-registered') ||
+          code.includes('invalid-registration-token') ||
+          /NotRegistered/i.test(r.error?.message || '')
+        ) {
+          staleTokens.push(tokens[i]);
+        }
       }
     });
 
+    if (staleTokens.length > 0) {
+      try {
+        await query(
+          `DELETE FROM "UserFcmToken" WHERE "userId" = $1 AND token = ANY($2::text[])`,
+          [userId, staleTokens]
+        );
+        console.log(
+          `[FCM] Removidos ${staleTokens.length} token(s) inválido(s) userId=${userId}`
+        );
+      } catch (e) {
+        console.warn('[FCM] Falha ao limpar tokens inválidos', e);
+      }
+    }
+
     if (empty.ok) {
       console.log(
-        `[FCM] OK userId=${userId} success=${result.successCount} type=${data?.type || 'generic'} project=${projectId}`
+        `[FCM] OK userId=${userId} success=${result.successCount} fail=${result.failureCount} type=${data?.type || 'generic'} project=${projectId}`
       );
     }
     return empty;

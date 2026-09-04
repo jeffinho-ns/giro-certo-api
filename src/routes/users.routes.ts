@@ -817,15 +817,21 @@ router.post('/me/fcm-test', authenticateToken, async (req: AuthRequest, res: Res
       { type: 'fcm_test' }
     );
     if (!result.ok) {
+      const firstError = result.errors[0] || 'Falha ao enviar FCM';
+      const isNotRegistered = /not-registered|NotRegistered|invalid-registration/i.test(
+        firstError
+      );
       return res.status(502).json({
         ok: false,
-        error: result.errors[0] || 'Falha ao enviar FCM',
+        error: firstError,
         ...result,
         hint: !result.usingFcmDedicatedApp
           ? 'Configure FIREBASE_FCM_* no Render com o service account de giro-certo-72def'
-          : result.projectId && result.projectId !== 'giro-certo-72def'
-            ? `Projeto FCM atual=${result.projectId}; esperado=giro-certo-72def`
-            : 'Verifique PRIVATE_KEY (\\n) e se o JSON é do projeto giro-certo-72def',
+          : isNotRegistered
+            ? 'Token antigo inválido (reinstall). Abra o app de novo para registar token fresco.'
+            : result.projectId && result.projectId !== 'giro-certo-72def'
+              ? `Projeto FCM atual=${result.projectId}; esperado=giro-certo-72def`
+              : 'Verifique PRIVATE_KEY (\\n) e se o JSON é do projeto giro-certo-72def',
       });
     }
     res.json({
