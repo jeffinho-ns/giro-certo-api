@@ -807,17 +807,36 @@ router.post('/me/fcm-test', authenticateToken, async (req: AuthRequest, res: Res
       return res.status(400).json({
         ok: false,
         error: 'Nenhum token FCM registado para este utilizador',
+        hint: 'Abra o app logado e aguarde o registo do token',
       });
     }
-    await sendPushToUser(
+    const result = await sendPushToUser(
       userId,
       'Teste API Giro Certo',
       'Se você viu isto, o FCM da API está a funcionar.',
       { type: 'fcm_test' }
     );
-    res.json({ ok: true, tokenCount: tokens.length });
+    if (!result.ok) {
+      return res.status(502).json({
+        ok: false,
+        error: result.errors[0] || 'Falha ao enviar FCM',
+        ...result,
+        hint: !result.usingFcmDedicatedApp
+          ? 'Configure FIREBASE_FCM_* no Render com o service account de giro-certo-72def'
+          : result.projectId && result.projectId !== 'giro-certo-72def'
+            ? `Projeto FCM atual=${result.projectId}; esperado=giro-certo-72def`
+            : 'Verifique PRIVATE_KEY (\\n) e se o JSON é do projeto giro-certo-72def',
+      });
+    }
+    res.json({
+      ok: true,
+      tokenCount: result.tokenCount,
+      successCount: result.successCount,
+      projectId: result.projectId,
+      usingFcmDedicatedApp: result.usingFcmDedicatedApp,
+    });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ ok: false, error: error.message });
   }
 });
 
