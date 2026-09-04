@@ -1,12 +1,74 @@
 /**
- * Envio de notificações push (FCM) para aparecer no telemóvel quando bloqueado.
- * Usa o mesmo projeto Firebase do storage; tokens guardados em UserFcmToken.
+ * Envio de notificações push (FCM).
+ *
+ * Importante: o app Flutter (giro-certo-72def) regista tokens FCM nesse projeto.
+ * O Storage de imagens pode continuar no projeto agilizaiapp-img.
+ * Por isso o FCM usa um Firebase App dedicado (FIREBASE_FCM_*), com fallback
+ * para o Admin do storage só se as credenciais FCM não existirem.
  */
 
 import * as admin from 'firebase-admin';
 import { ensureFirebaseApp } from './firebase-storage.service';
-import { query, queryOne } from '../lib/db';
+import { query } from '../lib/db';
 import { generateId } from '../utils/id';
+
+const FCM_APP_NAME = 'giro-certo-fcm';
+
+function normalizePrivateKey(value: string | undefined): string {
+  if (!value) return '';
+  let v = String(value).trim();
+  if (
+    (v.startsWith('"') && v.endsWith('"')) ||
+    (v.startsWith("'") && v.endsWith("'"))
+  ) {
+    v = v.slice(1, -1);
+  }
+  return v.replace(/\\n/g, '\n');
+}
+
+/**
+ * App Firebase usado só para Messaging (deve ser o mesmo projeto do GoogleService-Info / google-services).
+ */
+function ensureFcmApp(): admin.app.App {
+  const existing = admin.apps.find((a) => a?.name === FCM_APP_NAME);
+  if (existing) return existing;
+
+  const hasFcmIndividual =
+    !!process.env.FIREBASE_FCM_PROJECT_ID &&
+    !!process.env.FIREBASE_FCM_CLIENT_EMAIL &&
+    !!process.env.FIREBASE_FCM_PRIVATE_KEY;
+
+  if (hasFcmIndividual) {
+    return admin.initializeApp(
+      {
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_FCM_PROJECT_ID!,
+          clientEmail: process.env.FIREBASE_FCM_CLIENT_EMAIL!,
+          privateKey: normalizePrivateKey(process.env.FIREBASE_FCM_PRIVATE_KEY),
+        }),
+      },
+      FCM_APP_NAME
+    );
+  }
+
+  if (process.env.FIREBASE_FCM_CREDENTIALS_JSON_BASE64) {
+    const json = Buffer.from(
+      process.env.FIREBASE_FCM_CREDENTIALS_JSON_BASE64,
+      'base64'
+    ).toString('utf8');
+    return admin.initializeApp(
+      { credential: admin.credential.cert(JSON.parse(json)) },
+      FCM_APP_NAME
+    );
+  }
+
+  // Fallback: mesmo app do Storage (só funciona se o app Flutter usar esse projeto).
+  console.warn(
+    '[FCM] FIREBASE_FCM_* não configurado — usando Firebase do Storage. ' +
+      'Tokens do projeto giro-certo-72def falharão se o Storage for outro projeto.'
+  );
+  return ensureFirebaseApp();
+}
 
 export async function registerFcmToken(userId: string, token: string): Promise<void> {
   if (!token || typeof token !== 'string' || token.length < 10) return;
@@ -17,8 +79,8 @@ export async function registerFcmToken(userId: string, token: string): Promise<v
        ON CONFLICT ("userId", token) DO UPDATE SET "createdAt" = NOW()`,
       [id, userId, token]
     );
-  } catch (_) {
-    // Tabela UserFcmToken pode não existir ainda (executar scripts/migrate-user-fcm-tokens.sql)
+  } catch (e) {
+    console.warn('[FCM] Falha ao guardar token (tabela UserFcmToken?)', e);
   }
 }
 
@@ -45,30 +107,54 @@ export async function sendPushToUser(
   data?: Record<string, string>
 ): Promise<void> {
   try {
-    ensureFirebaseApp();
+    const app = ensureFcmApp();
     const tokens = await getFcmTokensForUser(userId);
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) {
+      console.warn('[FCM] Sem tokens para userId=', userId);
+      return;
+    }
 
-    const messaging = admin.messaging();
+    const messaging = admin.messaging(app);
     const message: admin.messaging.MulticastMessage = {
       tokens,
       notification: { title, body },
       data: data || {},
       android: {
         priority: 'high',
-        // Canal de alta importância criado no app (toca som/vibra mesmo com a tela bloqueada).
         notification: {
           channelId: 'giro_certo_alerts',
           sound: 'default',
           defaultSound: true,
           defaultVibrateTimings: true,
-          notificationPriority: 'PRIORITY_MAX',
+          priority: 'max',
         },
       },
-      apns: { payload: { aps: { sound: 'default' } } },
+      apns: {
+        headers: {
+          'apns-priority': '10',
+          'apns-push-type': 'alert',
+        },
+        payload: { aps: { sound: 'default' } },
+      },
     };
-    await messaging.sendEachForMulticast(message);
-  } catch (_) {
-    // Ignorar falhas FCM (token inválido, projeto sem FCM, etc.)
+
+    const result = await messaging.sendEachForMulticast(message);
+    if (result.failureCount > 0) {
+      result.responses.forEach((r, i) => {
+        if (!r.success) {
+          console.error(
+            `[FCM] Falha token[${i}]:`,
+            r.error?.code,
+            r.error?.message
+          );
+        }
+      });
+    } else {
+      console.log(
+        `[FCM] OK userId=${userId} success=${result.successCount} type=${data?.type || 'generic'}`
+      );
+    }
+  } catch (e: any) {
+    console.error('[FCM] Erro ao enviar:', e?.code || e?.message || e);
   }
 }
