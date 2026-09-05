@@ -74,52 +74,63 @@ router.post(
         return res.status(403).json({ error: 'Sem permissão para fazer upload' });
       }
 
+      const isPrimary = req.body.isPrimary === 'true' || req.body.isPrimary === true;
+
+      // Preferir Firebase; se falhar (credencial/bucket), cai no armazenamento local (BYTEA)
+      // para o app antigo continuar a funcionar sem novo build.
       if (isFirebaseConfigured()) {
-        const ext = path.extname(file.originalname) || '.jpg';
-        const filename = `${generateId()}${ext}`;
-        const subfolder = FIREBASE_FOLDER[entityType.toLowerCase()] || 'general';
-        const objectPath = buildObjectPath(subfolder, filename);
+        try {
+          const ext = path.extname(file.originalname) || '.jpg';
+          const filename = `${generateId()}${ext}`;
+          const subfolder = FIREBASE_FOLDER[entityType.toLowerCase()] || 'general';
+          const objectPath = buildObjectPath(subfolder, filename);
 
-        const result = await uploadBuffer({
-          objectPath,
-          buffer: file.buffer,
-          contentType: file.mimetype,
-        });
+          const result = await uploadBuffer({
+            objectPath,
+            buffer: file.buffer,
+            contentType: file.mimetype,
+          });
 
-        res.status(201).json({
-          image: {
-            id: result.objectPath,
-            entityType,
-            entityId,
-            filename: file.originalname,
-            mimetype: file.mimetype,
-            size: file.size,
-            isPrimary: true,
-            url: result.url,
-            createdAt: new Date(),
-          },
-        });
-      } else {
-        const isPrimary = req.body.isPrimary === 'true' || req.body.isPrimary === true;
-        const image = await imageService.uploadImage(entityType, entityId, file, isPrimary);
-        const baseUrl = process.env.API_URL || 'https://giro-certo-api.onrender.com';
-        const imageUrl = `${baseUrl}/api/images/${image.id}`;
-
-        res.status(201).json({
-          image: {
-            id: image.id,
-            entityType: image.entityType,
-            entityId: image.entityId,
-            filename: image.filename,
-            mimetype: image.mimetype,
-            size: image.size,
-            isPrimary: image.isPrimary,
-            url: imageUrl,
-            createdAt: image.createdAt,
-          },
-        });
+          return res.status(201).json({
+            image: {
+              id: result.objectPath,
+              entityType,
+              entityId,
+              filename: file.originalname,
+              mimetype: file.mimetype,
+              size: file.size,
+              isPrimary: true,
+              url: result.url,
+              createdAt: new Date(),
+            },
+          });
+        } catch (firebaseErr: any) {
+          console.error(
+            '[images] Firebase upload falhou; fallback local:',
+            firebaseErr?.message || firebaseErr
+          );
+        }
       }
+
+      const image = await imageService.uploadImage(entityType, entityId, file, isPrimary);
+      const baseUrl = process.env.API_URL || 'https://giro-certo-api.onrender.com';
+      const imageUrl = `${baseUrl}/api/images/${image.id}`;
+
+      res.status(201).json({
+        image: {
+          id: image.id,
+          entityType: image.entityType,
+          entityId: image.entityId,
+          filename: image.filename,
+          mimetype: image.mimetype,
+          size: image.size,
+          isPrimary: image.isPrimary,
+          url: imageUrl,
+          createdAt: image.createdAt,
+        },
+      });
     } catch (error: any) {
+      console.error('[images] upload failed:', error?.message || error);
       res.status(400).json({ error: error.message });
     }
   }

@@ -16,6 +16,24 @@ function bufferToBase64(buffer: Buffer | null | undefined): string | null {
   return Buffer.isBuffer(buffer) ? buffer.toString('base64') : null;
 }
 
+/** Garante colunas adicionadas após o MVP — evita 400 se a migração SQL não rodou no Render. */
+let schemaEnsured = false;
+async function ensureDeliveryRegistrationSchema(): Promise<void> {
+  if (schemaEnsured) return;
+  await query(`
+    ALTER TABLE "DeliveryRegistration"
+      ADD COLUMN IF NOT EXISTS "selfieWithDocData" BYTEA,
+      ADD COLUMN IF NOT EXISTS "motoWithPlateData" BYTEA,
+      ADD COLUMN IF NOT EXISTS "platePlateCloseupData" BYTEA,
+      ADD COLUMN IF NOT EXISTS "cnhPhotoData" BYTEA,
+      ADD COLUMN IF NOT EXISTS "crlvPhotoData" BYTEA,
+      ADD COLUMN IF NOT EXISTS "vehicleType" VARCHAR(20) NOT NULL DEFAULT 'MOTORCYCLE',
+      ADD COLUMN IF NOT EXISTS equipments TEXT[] NOT NULL DEFAULT '{}',
+      ADD COLUMN IF NOT EXISTS "bikeOptionalReceiptData" BYTEA
+  `);
+  schemaEnsured = true;
+}
+
 export class DeliveryRegistrationService {
   /**
    * Criar um novo registro de delivery (entregador)
@@ -34,6 +52,8 @@ export class DeliveryRegistrationService {
       throw new Error('Usuário não encontrado');
     }
 
+    await ensureDeliveryRegistrationSchema();
+
     const registrationId = generateId();
     const lastOilChangeDate = data.lastOilChangeDate || null;
     const lastOilChangeKm = data.lastOilChangeKm || null;
@@ -48,38 +68,94 @@ export class DeliveryRegistrationService {
         ? Buffer.from(data.bikeOptionalReceiptBase64, 'base64')
         : null);
 
-    await query(
-      `INSERT INTO "DeliveryRegistration" (
-        id, "userId", status, "vehicleType", "cpfCnh", "selfieWithDocData", 
-        "motoWithPlateData", "platePlateCloseupData", "cnhPhotoData", 
-        "crlvPhotoData", "plateLicense", "currentKilometers", 
-        "lastOilChangeDate", "lastOilChangeKm", "emergencyPhone", 
-        "consentImages", equipments, "bikeOptionalReceiptData", "createdAt", "updatedAt"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())`,
-      [
-        registrationId,
-        userId,
-        DeliveryRegistrationStatus.PENDING,
-        vehicleType,
-        data.documentId,
-        data.selfieWithDocData || null,
-        data.motoWithPlateData || null,
-        data.platePlateCloseupData || null,
-        data.cnhPhotoData || null,
-        data.crlvPhotoData || null,
-        data.plateLicense,
-        data.currentKilometers,
-        lastOilChangeDate,
-        lastOilChangeKm,
-        data.emergencyPhone || null,
-        data.consentImages,
-        equipments,
-        bikeOptionalReceipt || null,
-      ]
-    );
+    if (!data.documentId || !String(data.documentId).trim()) {
+      throw new Error('documentId (CPF/CNH) é obrigatório');
+    }
+    const plateLicense =
+      data.plateLicense == null || String(data.plateLicense).trim() === ''
+        ? '-'
+        : String(data.plateLicense);
 
+    try {
+      await query(
+        `INSERT INTO "DeliveryRegistration" (
+          id, "userId", status, "vehicleType", "cpfCnh", "selfieWithDocData", 
+          "motoWithPlateData", "platePlateCloseupData", "cnhPhotoData", 
+          "crlvPhotoData", "plateLicense", "currentKilometers", 
+          "lastOilChangeDate", "lastOilChangeKm", "emergencyPhone", 
+          "consentImages", equipments, "bikeOptionalReceiptData", "createdAt", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())`,
+        [
+          registrationId,
+          userId,
+          DeliveryRegistrationStatus.PENDING,
+          vehicleType,
+          data.documentId,
+          data.selfieWithDocData || null,
+          data.motoWithPlateData || null,
+          data.platePlateCloseupData || null,
+          data.cnhPhotoData || null,
+          data.crlvPhotoData || null,
+          plateLicense,
+          data.currentKilometers,
+          lastOilChangeDate,
+          lastOilChangeKm,
+          data.emergencyPhone || null,
+          data.consentImages,
+          equipments,
+          bikeOptionalReceipt || null,
+        ]
+      );
+    } catch (err: any) {
+      // Fallback: schema antigo (antes de vehicleType/equipments) — como o create original
+      if (err?.code === '42703' || String(err?.message || '').includes('does not exist')) {
+        console.warn(
+          '[delivery-registration] INSERT completo falhou; tentando schema legado:',
+          err?.message
+        );
+        schemaEnsured = false;
+        await query(
+          `INSERT INTO "DeliveryRegistration" (
+            id, "userId", status, "cpfCnh", "selfieWithDocData",
+            "motoWithPlateData", "platePlateCloseupData", "cnhPhotoData",
+            "crlvPhotoData", "plateLicense", "currentKilometers",
+            "lastOilChangeDate", "lastOilChangeKm", "emergencyPhone",
+            "consentImages", "createdAt", "updatedAt"
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())`,
+          [
+            registrationId,
+            userId,
+            DeliveryRegistrationStatus.PENDING,
+            data.documentId,
+            data.selfieWithDocData || null,
+            data.motoWithPlateData || null,
+            data.platePlateCloseupData || null,
+            data.cnhPhotoData || null,
+            data.crlvPhotoData || null,
+            plateLicense,
+            data.currentKilometers,
+            lastOilChangeDate,
+            lastOilChangeKm,
+            data.emergencyPhone || null,
+            data.consentImages,
+          ]
+        );
+      } else if (err?.code === '22001') {
+        throw new Error('Algum campo texto excede o tamanho permitido');
+      } else {
+        throw err;
+      }
+    }
+
+    // Nunca devolver BYTEA/base64 no create — payload enorme causa 400/OOM no Render.
+    // O app só precisa de HTTP 201; o body é opcional.
     const registration = await queryOne<any>(
-      'SELECT * FROM "DeliveryRegistration" WHERE id = $1',
+      `SELECT id, "userId", status, "cpfCnh", "plateLicense",
+              "currentKilometers", "lastOilChangeDate", "lastOilChangeKm",
+              "emergencyPhone", "consentImages",
+              "approvedAt", "rejectionReason", "adminNotes",
+              "createdAt", "updatedAt"
+       FROM "DeliveryRegistration" WHERE id = $1`,
       [registrationId]
     );
 
@@ -87,18 +163,7 @@ export class DeliveryRegistrationService {
       throw new Error('Erro ao criar registro de delivery');
     }
 
-    // Converter imagens em base64
-    return {
-      ...registration,
-      selfieWithDocData: bufferToBase64(registration.selfieWithDocData),
-      motoWithPlateData: bufferToBase64(registration.motoWithPlateData),
-      platePlateCloseupData: bufferToBase64(registration.platePlateCloseupData),
-      cnhPhotoData: bufferToBase64(registration.cnhPhotoData),
-      crlvPhotoData: bufferToBase64(registration.crlvPhotoData),
-      bikeOptionalReceiptData: bufferToBase64(
-        (registration as any).bikeOptionalReceiptData
-      ),
-    };
+    return registration;
   }
 
   /**

@@ -19,6 +19,14 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 
     const data: CreateDeliveryRegistrationDto = req.body;
 
+    const bodyBytes = Number(req.headers['content-length'] || 0);
+    if (bodyBytes > 45 * 1024 * 1024) {
+      return res.status(413).json({
+        error:
+          'Fotos muito grandes. Tire novamente com menor resolução ou comprima antes de enviar.',
+      });
+    }
+
     // Converter imagens base64 em buffers se fornecidas
     const processedData = {
       ...data,
@@ -42,14 +50,27 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         : null,
     };
 
+    // Liberar strings base64 do body o quanto antes (GC) — evita OOM no Render
+    delete (data as any).selfieWithDocBase64;
+    delete (data as any).motoWithPlateBase64;
+    delete (data as any).platePlateCloseupBase64;
+    delete (data as any).cnhPhotoBase64;
+    delete (data as any).crlvPhotoBase64;
+    delete (data as any).bikeOptionalReceiptBase64;
+
     const registration = await registrationService.createRegistration(
       req.userId,
-      processedData
+      processedData as CreateDeliveryRegistrationDto
     );
 
     res.status(201).json({ registration });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    console.error('[delivery-registration] create failed:', error?.message || error);
+    const status =
+      error?.statusCode === 413 || error?.type === 'entity.too.large' ? 413 : 400;
+    res.status(status).json({
+      error: error?.message || 'Falha ao criar registro de delivery',
+    });
   }
 });
 

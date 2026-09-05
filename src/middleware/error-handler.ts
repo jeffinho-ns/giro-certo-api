@@ -8,6 +8,14 @@ export function errorHandler(
 ) {
   console.error('Error:', err);
 
+  // Payload JSON grande demais (fotos em base64)
+  if (err?.type === 'entity.too.large' || err?.status === 413 || err?.statusCode === 413) {
+    return res.status(413).json({
+      error:
+        'Arquivo(s) muito grande(s). Reduza a resolução das fotos e tente novamente.',
+    });
+  }
+
   // Erro de validação do banco de dados
   if (err.code === '23505') {
     // Unique constraint violation
