@@ -17,6 +17,7 @@ export enum MaintenanceCategory {
   TRAVOES = 'TRAVOES',
   FILTROS = 'FILTROS',
   TRANSMISSAO = 'TRANSMISSAO',
+  MOTOR = 'MOTOR',
 }
 
 export enum MaintenanceStatus {

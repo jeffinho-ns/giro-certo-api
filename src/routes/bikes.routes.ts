@@ -3,8 +3,48 @@ import { authenticateToken, AuthRequest, requireModerator } from '../middleware/
 import { query, queryOne } from '../lib/db';
 import { CreateBikeDto, CreateMaintenanceLogDto, Bike, MaintenanceLog, User, VehicleType } from '../types';
 import { generateId } from '../utils/id';
+import {
+  normalizeMaintenanceCategory,
+  normalizeMaintenanceStatus,
+  toFiniteInt,
+  toWearPercentage,
+} from '../utils/maintenance-normalize';
 
 const router = Router();
+
+const ORIGINAL_MAINTENANCE_CATEGORIES = new Set([
+  'OLEO',
+  'PNEUS',
+  'TRAVOES',
+  'FILTROS',
+  'TRANSMISSAO',
+]);
+const ensuredMaintenanceCategories = new Set<string>();
+
+async function ensureMaintenanceCategoryValue(category: string): Promise<void> {
+  if (ORIGINAL_MAINTENANCE_CATEGORIES.has(category)) return;
+  if (ensuredMaintenanceCategories.has(category)) return;
+  const allowed = new Set(['MOTOR']);
+  if (!allowed.has(category)) return;
+  try {
+    await query(
+      `ALTER TYPE "MaintenanceCategory" ADD VALUE IF NOT EXISTS '${category}'`
+    );
+    ensuredMaintenanceCategories.add(category);
+  } catch (error: any) {
+    const msg = String(error?.message || '');
+    if (
+      msg.includes('already exists') ||
+      msg.includes('duplicate') ||
+      msg.includes('já existe')
+    ) {
+      ensuredMaintenanceCategories.add(category);
+      return;
+    }
+    console.warn('[maintenance] ensure enum value failed:', msg);
+  }
+}
+
 
 // Listar motos do usuário
 router.get('/me/bikes', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -275,6 +315,19 @@ router.post('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, 
 
     const bikeId = Array.isArray(req.params.bikeId) ? req.params.bikeId[0] : req.params.bikeId;
     const data: CreateMaintenanceLogDto = req.body;
+    const partName = String(data?.partName ?? '').trim();
+    if (!partName) {
+      return res.status(400).json({ error: 'Informe a peça da manutenção.' });
+    }
+
+    const category = normalizeMaintenanceCategory(data?.category);
+    if (!category) {
+      return res.status(400).json({
+        error: 'Categoria de manutenção inválida. Tenta novamente.',
+      });
+    }
+
+    await ensureMaintenanceCategoryValue(category);
 
     // Verificar se a moto pertence ao usuário
     const bike = await queryOne<Bike>(
@@ -286,6 +339,14 @@ router.post('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, 
       return res.status(403).json({ error: 'Moto não encontrada ou não pertence ao usuário' });
     }
 
+    const lastChangeKm = toFiniteInt(data.lastChangeKm);
+    const recommendedChangeKm = toFiniteInt(data.recommendedChangeKm);
+    const currentKm = toFiniteInt(
+      data.currentKm,
+      toFiniteInt((bike as Bike).currentKm, lastChangeKm)
+    );
+    const wearPercentage = toWearPercentage(data.wearPercentage);
+    const status = normalizeMaintenanceStatus(data.status);
     const logId = generateId();
 
     await query(
@@ -298,21 +359,24 @@ router.post('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, 
         logId,
         bikeId,
         req.userId,
-        data.partName,
-        data.category,
-        data.lastChangeKm,
-        data.recommendedChangeKm,
-        data.currentKm,
-        data.wearPercentage,
-        data.status,
+        partName,
+        category,
+        lastChangeKm,
+        recommendedChangeKm,
+        currentKm,
+        wearPercentage,
+        status,
       ]
     );
 
-    // Adicionar pontos de fidelidade (5 pontos por manutenção registrada)
-    await query(
-      'UPDATE "User" SET "loyaltyPoints" = "loyaltyPoints" + 5, "updatedAt" = NOW() WHERE id = $1',
-      [req.userId]
-    );
+    try {
+      await query(
+        'UPDATE "User" SET "loyaltyPoints" = COALESCE("loyaltyPoints", 0) + 5, "updatedAt" = NOW() WHERE id = $1',
+        [req.userId]
+      );
+    } catch (loyaltyError: any) {
+      console.warn('[maintenance] loyaltyPoints skip:', loyaltyError?.message || loyaltyError);
+    }
 
     const maintenanceLog = await queryOne<MaintenanceLog>(
       'SELECT * FROM "MaintenanceLog" WHERE id = $1',
