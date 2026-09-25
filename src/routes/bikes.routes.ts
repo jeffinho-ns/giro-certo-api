@@ -81,7 +81,15 @@ router.get('/me/bikes', authenticateToken, async (req: AuthRequest, res: Respons
        LEFT JOIN "MaintenanceLog" ml ON ml."bikeId" = b.id
        WHERE b."userId" = $1
        GROUP BY b.id
-       ORDER BY b."updatedAt" DESC, b."createdAt" DESC`,
+       ORDER BY
+         CASE
+           WHEN COALESCE(NULLIF(TRIM(b."vehiclePhotoUrl"), ''), NULLIF(TRIM(b."photoUrl"), '')) IS NOT NULL
+             THEN 0
+           WHEN COALESCE(array_length(b."galleryUrls", 1), 0) > 0 THEN 0
+           ELSE 1
+         END,
+         b."updatedAt" DESC,
+         b."createdAt" DESC`,
       [req.userId]
     );
 
