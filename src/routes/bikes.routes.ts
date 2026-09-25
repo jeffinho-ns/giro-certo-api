@@ -9,6 +9,11 @@ import {
   toFiniteInt,
   toWearPercentage,
 } from '../utils/maintenance-normalize';
+import {
+  ensureUserBike,
+  resolveBikeForMaintenance,
+  seedBaselineMaintenanceLogs,
+} from '../services/bike-maintenance-bootstrap.service';
 
 const router = Router();
 
@@ -52,6 +57,10 @@ router.get('/me/bikes', authenticateToken, async (req: AuthRequest, res: Respons
     if (!req.userId) {
       return res.status(401).json({ error: 'Não autenticado' });
     }
+
+    // Se o app só tem id falso (delivery-registration-fallback / "1"),
+    // materializa a Bike a partir do cadastro delivery + baseline de manutenção.
+    await ensureUserBike(req.userId);
 
     const bikes = await query<Bike & { maintenanceLogs: MaintenanceLog[] }>(
       `SELECT 
@@ -175,6 +184,17 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       'SELECT * FROM "Bike" WHERE id = $1',
       [bikeId]
     );
+
+    if (bike) {
+      try {
+        await seedBaselineMaintenanceLogs(bike);
+      } catch (seedError: any) {
+        console.warn(
+          '[maintenance] seed on create skipped:',
+          seedError?.message || seedError
+        );
+      }
+    }
 
     res.status(201).json({ bike });
   } catch (error: any) {
@@ -329,14 +349,15 @@ router.post('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, 
 
     await ensureMaintenanceCategoryValue(category);
 
-    // Verificar se a moto pertence ao usuário
-    const bike = await queryOne<Bike>(
-      'SELECT * FROM "Bike" WHERE id = $1',
-      [bikeId]
-    );
+    // Aceita ids fictícios do app (delivery-registration-fallback / "1")
+    // e materializa a Bike real sem exigir novo build.
+    const bike = await resolveBikeForMaintenance(req.userId, bikeId);
 
-    if (!bike || bike.userId !== req.userId) {
-      return res.status(403).json({ error: 'Moto não encontrada ou não pertence ao usuário' });
+    if (!bike) {
+      return res.status(403).json({
+        error:
+          'Moto não encontrada. Abre a Garagem, confirma a quilometragem e tenta de novo.',
+      });
     }
 
     const lastChangeKm = toFiniteInt(data.lastChangeKm);
@@ -357,7 +378,7 @@ router.post('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, 
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())`,
       [
         logId,
-        bikeId,
+        bike.id,
         req.userId,
         partName,
         category,
@@ -368,6 +389,18 @@ router.post('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, 
         status,
       ]
     );
+
+    // Mantém currentKm da bike alinhado se o app enviou um valor maior.
+    if (currentKm > toFiniteInt(bike.currentKm)) {
+      try {
+        await query(
+          `UPDATE "Bike" SET "currentKm" = $1, "updatedAt" = NOW() WHERE id = $2`,
+          [currentKm, bike.id]
+        );
+      } catch (_) {
+        /* ignore */
+      }
+    }
 
     try {
       await query(
@@ -392,13 +425,21 @@ router.post('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, 
 // Listar logs de manutenção
 router.get('/:bikeId/maintenance', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+
     const bikeId = Array.isArray(req.params.bikeId) ? req.params.bikeId[0] : req.params.bikeId;
+    const bike = await resolveBikeForMaintenance(req.userId, bikeId);
+    if (!bike) {
+      return res.json({ logs: [] });
+    }
 
     const logs = await query<MaintenanceLog>(
       `SELECT * FROM "MaintenanceLog" 
        WHERE "bikeId" = $1 
        ORDER BY "createdAt" DESC`,
-      [bikeId]
+      [bike.id]
     );
 
     res.json({ logs });

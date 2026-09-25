@@ -1,0 +1,257 @@
+import { query, queryOne } from '../lib/db';
+import { Bike, MaintenanceCategory, MaintenanceStatus, VehicleType } from '../types';
+import { generateId } from '../utils/id';
+import {
+  normalizeMaintenanceCategory,
+  toFiniteInt,
+} from '../utils/maintenance-normalize';
+
+/** IDs fictícios que o app Flutter ainda usa quando não há Bike na API. */
+export const FAKE_BIKE_IDS = new Set([
+  'delivery-registration-fallback',
+  '1',
+  'bike-1',
+]);
+
+type DeliveryRegLite = {
+  plateLicense: string | null;
+  currentKilometers: number | null;
+  lastOilChangeKm: number | null;
+  vehicleType?: string | null;
+};
+
+type SeedItem = {
+  partName: string;
+  category: MaintenanceCategory;
+  cycleKm: number;
+  useOilBaseline: boolean;
+};
+
+const MOTORCYCLE_SEED: SeedItem[] = [
+  { partName: 'Óleo do Motor', category: MaintenanceCategory.OLEO, cycleKm: 5000, useOilBaseline: true },
+  { partName: 'Filtro de Óleo', category: MaintenanceCategory.FILTROS, cycleKm: 10000, useOilBaseline: true },
+  { partName: 'Filtro de Ar', category: MaintenanceCategory.FILTROS, cycleKm: 15000, useOilBaseline: false },
+  { partName: 'Pneus Dianteiro e Traseiro', category: MaintenanceCategory.PNEUS, cycleKm: 20000, useOilBaseline: false },
+  { partName: 'Pastilhas de Travão', category: MaintenanceCategory.TRAVOES, cycleKm: 12000, useOilBaseline: false },
+  { partName: 'Fluido de Travão', category: MaintenanceCategory.TRAVOES, cycleKm: 20000, useOilBaseline: false },
+  { partName: 'Corrente e Coroa', category: MaintenanceCategory.TRANSMISSAO, cycleKm: 25000, useOilBaseline: false },
+  { partName: 'Vela de Ignição', category: MaintenanceCategory.MOTOR, cycleKm: 15000, useOilBaseline: false },
+  { partName: 'Fluido de Arrefecimento', category: MaintenanceCategory.MOTOR, cycleKm: 40000, useOilBaseline: false },
+];
+
+const BICYCLE_SEED: SeedItem[] = [
+  { partName: 'Corrente', category: MaintenanceCategory.TRANSMISSAO, cycleKm: 2500, useOilBaseline: true },
+  { partName: 'Pastilhas de Travão', category: MaintenanceCategory.TRAVOES, cycleKm: 1500, useOilBaseline: true },
+  { partName: 'Pneus', category: MaintenanceCategory.PNEUS, cycleKm: 5000, useOilBaseline: false },
+  { partName: 'Cabos e Conduítes', category: MaintenanceCategory.TRAVOES, cycleKm: 3000, useOilBaseline: false },
+];
+
+let motorEnumEnsured = false;
+async function ensureMotorCategoryEnum(): Promise<void> {
+  if (motorEnumEnsured) return;
+  try {
+    await query(
+      `ALTER TYPE "MaintenanceCategory" ADD VALUE IF NOT EXISTS 'MOTOR'`
+    );
+  } catch (error: any) {
+    const msg = String(error?.message || '');
+    if (
+      !msg.includes('already exists') &&
+      !msg.includes('duplicate') &&
+      !msg.includes('já existe')
+    ) {
+      console.warn('[maintenance-bootstrap] MOTOR enum:', msg);
+    }
+  }
+  motorEnumEnsured = true;
+}
+
+async function latestDeliveryRegistration(userId: string): Promise<DeliveryRegLite | null> {
+  try {
+    return await queryOne<DeliveryRegLite>(
+      `SELECT "plateLicense", "currentKilometers", "lastOilChangeKm", "vehicleType"
+       FROM "DeliveryRegistration"
+       WHERE "userId" = $1
+       ORDER BY "createdAt" DESC
+       LIMIT 1`,
+      [userId]
+    );
+  } catch (error: any) {
+    console.warn('[maintenance-bootstrap] delivery reg read:', error?.message || error);
+    return null;
+  }
+}
+
+async function listUserBikes(userId: string): Promise<Bike[]> {
+  return query<Bike>(
+    `SELECT * FROM "Bike" WHERE "userId" = $1 ORDER BY "updatedAt" DESC, "createdAt" DESC`,
+    [userId]
+  );
+}
+
+/**
+ * Cria logs iniciais para o app calcular desgaste a partir do km informado
+ * no cadastro (não a partir de 0). Idempotente: só corre se a bike não tiver logs.
+ */
+export async function seedBaselineMaintenanceLogs(
+  bike: Bike,
+  opts: { lastOilChangeKm?: number | null } = {}
+): Promise<number> {
+  await ensureMotorCategoryEnum();
+
+  const existing = await queryOne<{ count: string }>(
+    `SELECT COUNT(*)::text as count FROM "MaintenanceLog" WHERE "bikeId" = $1`,
+    [bike.id]
+  );
+  if (Number(existing?.count || 0) > 0) return 0;
+
+  const currentKm = toFiniteInt(bike.currentKm);
+  const oilBaselineRaw = opts.lastOilChangeKm;
+  const oilBaseline =
+    oilBaselineRaw == null
+      ? currentKm
+      : Math.min(currentKm, Math.max(0, toFiniteInt(oilBaselineRaw)));
+
+  const isBike = String(bike.vehicleType || '').toUpperCase() === VehicleType.BICYCLE;
+  const items = isBike ? BICYCLE_SEED : MOTORCYCLE_SEED;
+
+  let inserted = 0;
+  for (const item of items) {
+    const category =
+      normalizeMaintenanceCategory(item.category) || item.category;
+    const lastChangeKm = item.useOilBaseline ? oilBaseline : currentKm;
+    const used = Math.max(0, currentKm - lastChangeKm);
+    const wear = item.cycleKm <= 0 ? 0 : Math.min(1, used / item.cycleKm);
+    const status =
+      wear >= 0.85
+        ? MaintenanceStatus.CRITICO
+        : wear >= 0.6
+          ? MaintenanceStatus.ATENCAO
+          : MaintenanceStatus.OK;
+
+    await query(
+      `INSERT INTO "MaintenanceLog" (
+        id, "bikeId", "userId", "partName", category, "lastChangeKm",
+        "recommendedChangeKm", "currentKm", "wearPercentage", status,
+        "createdAt", "updatedAt"
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())`,
+      [
+        generateId(),
+        bike.id,
+        bike.userId,
+        item.partName,
+        category,
+        lastChangeKm,
+        item.cycleKm,
+        currentKm,
+        wear,
+        status,
+      ]
+    );
+    inserted += 1;
+  }
+  return inserted;
+}
+
+/**
+ * Garante uma Bike real para o utilizador (cria a partir do cadastro delivery se preciso)
+ * e faz seed dos logs de manutenção baseline.
+ */
+export async function ensureUserBike(userId: string): Promise<Bike | null> {
+  const existing = await listUserBikes(userId);
+  const reg = await latestDeliveryRegistration(userId);
+
+  if (existing.length > 0) {
+    const bike = existing[0];
+    await seedBaselineMaintenanceLogs(bike, {
+      lastOilChangeKm: reg?.lastOilChangeKm,
+    });
+    return bike;
+  }
+
+  if (!reg) return null;
+
+  const vehicleType =
+    String(reg.vehicleType || VehicleType.MOTORCYCLE).toUpperCase() ===
+    VehicleType.BICYCLE
+      ? VehicleType.BICYCLE
+      : VehicleType.MOTORCYCLE;
+  const currentKm = toFiniteInt(reg.currentKilometers);
+  const plateRaw = String(reg.plateLicense || '').trim().toUpperCase();
+  // plate ainda é UNIQUE; gera placeholder único se vazio.
+  const plate =
+    plateRaw && plateRaw !== '-'
+      ? plateRaw
+      : `TMP-${userId.slice(0, 10)}-${Date.now().toString(36)}`.slice(0, 20);
+  const bikeId = generateId();
+
+  try {
+    await query(
+      `INSERT INTO "Bike" (
+        id, "userId", model, brand, "vehicleType", plate, "currentKm",
+        "oilType", "frontTirePressure", "rearTirePressure",
+        accessories, "galleryUrls",
+        "createdAt", "updatedAt"
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())`,
+      [
+        bikeId,
+        userId,
+        vehicleType === VehicleType.BICYCLE ? 'Delivery Bike' : 'Delivery',
+        vehicleType === VehicleType.BICYCLE ? 'Bicicleta' : 'Moto',
+        vehicleType,
+        plate,
+        currentKm,
+        vehicleType === VehicleType.BICYCLE ? null : '10W-40',
+        vehicleType === VehicleType.BICYCLE ? null : 2.5,
+        vehicleType === VehicleType.BICYCLE ? null : 2.8,
+        [],
+        [],
+      ]
+    );
+  } catch (error: any) {
+    const msg = String(error?.message || '');
+    if (msg.includes('Bike_plate') || msg.includes('duplicate') || error?.code === '23505') {
+      const byPlate = await queryOne<Bike>(
+        `SELECT * FROM "Bike" WHERE plate = $1 LIMIT 1`,
+        [plate]
+      );
+      if (byPlate && String(byPlate.userId) === String(userId)) {
+        await seedBaselineMaintenanceLogs(byPlate, {
+          lastOilChangeKm: reg.lastOilChangeKm,
+        });
+        return byPlate;
+      }
+    }
+    console.error('[maintenance-bootstrap] create bike failed:', msg);
+    throw error;
+  }
+
+  const bike = await queryOne<Bike>('SELECT * FROM "Bike" WHERE id = $1', [bikeId]);
+  if (!bike) return null;
+
+  await seedBaselineMaintenanceLogs(bike, {
+    lastOilChangeKm: reg.lastOilChangeKm,
+  });
+  return bike;
+}
+
+export async function resolveBikeForMaintenance(
+  userId: string,
+  requestedBikeId: string | undefined
+): Promise<Bike | null> {
+  const rawId = String(requestedBikeId || '').trim();
+  const isFake = !rawId || FAKE_BIKE_IDS.has(rawId);
+
+  if (!isFake) {
+    const bike = await queryOne<Bike>('SELECT * FROM "Bike" WHERE id = $1', [rawId]);
+    if (bike && String(bike.userId) === String(userId)) {
+      const reg = await latestDeliveryRegistration(userId);
+      await seedBaselineMaintenanceLogs(bike, {
+        lastOilChangeKm: reg?.lastOilChangeKm,
+      });
+      return bike;
+    }
+  }
+
+  return ensureUserBike(userId);
+}
