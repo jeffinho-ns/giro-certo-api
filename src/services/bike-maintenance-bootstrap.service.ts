@@ -177,15 +177,40 @@ export async function ensureUserBike(userId: string): Promise<Bike | null> {
       ? VehicleType.BICYCLE
       : VehicleType.MOTORCYCLE;
   const currentKm = toFiniteInt(reg.currentKilometers);
-  const plateRaw = String(reg.plateLicense || '').trim().toUpperCase();
-  // plate ainda é UNIQUE; gera placeholder único se vazio.
-  const plate =
+  const plateRaw = String(reg.plateLicense || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+
+  // Antes de inserir: se já existir Bike com esta placa do mesmo user, reutiliza.
+  if (plateRaw && plateRaw !== '-') {
+    const ownedByPlate = await queryOne<Bike>(
+      `SELECT * FROM "Bike"
+       WHERE "userId" = $1
+         AND UPPER(REPLACE(COALESCE(plate, ''), ' ', '')) = $2
+       ORDER BY "updatedAt" DESC
+       LIMIT 1`,
+      [userId, plateRaw]
+    );
+    if (ownedByPlate) {
+      await seedBaselineMaintenanceLogs(ownedByPlate, {
+        lastOilChangeKm: reg.lastOilChangeKm,
+      });
+      return ownedByPlate;
+    }
+  }
+
+  const uniqueSuffix = `${userId.replace(/[^a-zA-Z0-9]/g, '').slice(-6)}${Date.now()
+    .toString(36)
+    .slice(-4)}`.toUpperCase();
+  // plate é UNIQUE global — se a placa já estiver noutro user, usamos variante única.
+  let plate =
     plateRaw && plateRaw !== '-'
       ? plateRaw
-      : `TMP-${userId.slice(0, 10)}-${Date.now().toString(36)}`.slice(0, 20);
-  const bikeId = generateId();
+      : `TMP${uniqueSuffix}`.slice(0, 20);
 
-  try {
+  const insertBike = async (plateValue: string): Promise<Bike | null> => {
+    const bikeId = generateId();
     await query(
       `INSERT INTO "Bike" (
         id, "userId", model, brand, "vehicleType", plate, "currentKm",
@@ -199,7 +224,7 @@ export async function ensureUserBike(userId: string): Promise<Bike | null> {
         vehicleType === VehicleType.BICYCLE ? 'Delivery Bike' : 'Delivery',
         vehicleType === VehicleType.BICYCLE ? 'Bicicleta' : 'Moto',
         vehicleType,
-        plate,
+        plateValue,
         currentKm,
         vehicleType === VehicleType.BICYCLE ? null : '10W-40',
         vehicleType === VehicleType.BICYCLE ? null : 2.5,
@@ -208,25 +233,60 @@ export async function ensureUserBike(userId: string): Promise<Bike | null> {
         [],
       ]
     );
+    return queryOne<Bike>('SELECT * FROM "Bike" WHERE id = $1', [bikeId]);
+  };
+
+  let bike: Bike | null = null;
+  try {
+    bike = await insertBike(plate);
   } catch (error: any) {
     const msg = String(error?.message || '');
-    if (msg.includes('Bike_plate') || msg.includes('duplicate') || error?.code === '23505') {
-      const byPlate = await queryOne<Bike>(
-        `SELECT * FROM "Bike" WHERE plate = $1 LIMIT 1`,
-        [plate]
-      );
-      if (byPlate && String(byPlate.userId) === String(userId)) {
-        await seedBaselineMaintenanceLogs(byPlate, {
-          lastOilChangeKm: reg.lastOilChangeKm,
-        });
-        return byPlate;
-      }
+    const isPlateConflict =
+      msg.includes('Bike_plate') ||
+      msg.includes('duplicate key') ||
+      error?.code === '23505';
+
+    if (!isPlateConflict) {
+      console.error('[maintenance-bootstrap] create bike failed:', msg);
+      throw error;
     }
-    console.error('[maintenance-bootstrap] create bike failed:', msg);
-    throw error;
+
+    // Placa já existe: se for do mesmo user, reutiliza; senão cria com placa única.
+    const byPlate = await queryOne<Bike>(
+      `SELECT * FROM "Bike"
+       WHERE UPPER(REPLACE(COALESCE(plate, ''), ' ', '')) = $1
+       LIMIT 1`,
+      [plateRaw && plateRaw !== '-' ? plateRaw : plate]
+    );
+    if (byPlate && String(byPlate.userId) === String(userId)) {
+      await seedBaselineMaintenanceLogs(byPlate, {
+        lastOilChangeKm: reg.lastOilChangeKm,
+      });
+      return byPlate;
+    }
+
+    const fallbackPlate = `${(plateRaw || 'MOTO').slice(0, 8)}-${uniqueSuffix}`.slice(
+      0,
+      20
+    );
+    try {
+      bike = await insertBike(fallbackPlate);
+      console.warn(
+        `[maintenance-bootstrap] placa "${plate}" em uso; criada variante "${fallbackPlate}" para user ${userId}`
+      );
+    } catch (retryError: any) {
+      // Último recurso: placa totalmente aleatória.
+      const randomPlate = `GC${uniqueSuffix}${Math.floor(Math.random() * 90 + 10)}`.slice(
+        0,
+        20
+      );
+      bike = await insertBike(randomPlate);
+      console.warn(
+        `[maintenance-bootstrap] retry com placa aleatória "${randomPlate}" para user ${userId}`
+      );
+    }
   }
 
-  const bike = await queryOne<Bike>('SELECT * FROM "Bike" WHERE id = $1', [bikeId]);
   if (!bike) return null;
 
   await seedBaselineMaintenanceLogs(bike, {
