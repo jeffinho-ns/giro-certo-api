@@ -1,0 +1,19 @@
+---
+description: Projeto Giro Certo / Loja Virtual — API (Node.js + TS) — contexto e regras específicas
+alwaysApply: true
+---
+
+# Giro Certo — API (Node.js)
+
+> Documentos mestre: **`PLANO_LOJA_VIRTUAL.md`** e **`AGENTS.md`** na raiz (fonte de verdade). Regras gerais já vêm das rules `common-*` e `typescript-*` — **não as repita aqui**.
+
+## Stack (real)
+- Node.js — **TypeScript estrito** (evitar `any`).
+- PostgreSQL via `pg` (variável `DATABASE_URL`).
+- Consumida por `giro-certo-next` (web) e `giro-certo-flutter` (app).
+
+## Específico deste repo
+- Segurança e autorização moram **aqui** (API). Recalcular preços/valores no servidor.
+- Pedido só vira entrega após pagamento confirmado pelo webhook (Asaas).
+- Sempre criar migration para mudança de schema.
+- Responder sempre em português.
