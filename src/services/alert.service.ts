@@ -306,7 +306,7 @@ export class AlertService {
       alertsCreated++;
     }
 
-    // 2. Verificar manutenções críticas
+    // 2. Verificar manutenções críticas (só estado atual por peça)
     const criticalMaintenances = await query<{
       id: string;
       userId: string;
@@ -315,22 +315,34 @@ export class AlertService {
       wearPercentage: number;
       userName: string;
       bikeModel: string;
+      partName: string;
     }>(
       `SELECT 
-        ml.id,
-        ml."userId",
-        ml."bikeId",
-        ml.status,
-        ml."wearPercentage",
+        latest.id,
+        latest."userId",
+        latest."bikeId",
+        latest.status,
+        latest."wearPercentage",
         u.name as "userName",
-        b.model as "bikeModel"
-       FROM "MaintenanceLog" ml
-       INNER JOIN "User" u ON u.id = ml."userId"
-       INNER JOIN "Bike" b ON b.id = ml."bikeId"
-       WHERE (ml.status = 'CRITICO' OR ml."wearPercentage" >= 0.9)
+        b.model as "bikeModel",
+        latest."partName" as "partName"
+       FROM (
+         SELECT DISTINCT ON (ml."bikeId", ml."partName")
+           ml.id,
+           ml."userId",
+           ml."bikeId",
+           ml.status,
+           ml."wearPercentage",
+           ml."partName"
+         FROM "MaintenanceLog" ml
+         ORDER BY ml."bikeId", ml."partName", ml."createdAt" DESC
+       ) latest
+       INNER JOIN "User" u ON u.id = latest."userId"
+       INNER JOIN "Bike" b ON b.id = latest."bikeId"
+       WHERE (latest.status = 'CRITICO' OR COALESCE(latest."wearPercentage", 0) >= 0.9)
        AND NOT EXISTS (
          SELECT 1 FROM "Alert" a
-         WHERE a."userId" = ml."userId"
+         WHERE a."userId" = latest."userId"
          AND a.type = 'MAINTENANCE_CRITICAL'
          AND a."createdAt" > (NOW() - INTERVAL '1 day')
        )`
@@ -341,7 +353,7 @@ export class AlertService {
         type: AlertType.MAINTENANCE_CRITICAL,
         severity: AlertSeverity.CRITICAL,
         title: `Manutenção crítica: ${maintenance.bikeModel}`,
-        message: `O veículo ${maintenance.bikeModel} do entregador ${maintenance.userName} requer manutenção urgente. Status: ${maintenance.status}, Desgaste: ${(maintenance.wearPercentage * 100).toFixed(0)}%.`,
+        message: `O veículo ${maintenance.bikeModel} do entregador ${maintenance.userName} requer manutenção urgente (${maintenance.partName}). Status: ${maintenance.status}, Desgaste: ${(maintenance.wearPercentage * 100).toFixed(0)}%.`,
         userId: maintenance.userId,
       });
       alertsCreated++;

@@ -12,6 +12,10 @@ import { GooglePlacesService } from './google-places.service';
 import { WhatsAppParser } from '../utils/whatsapp-parser';
 import { DeliverySettlementLedgerService } from './delivery-settlement-ledger.service';
 import { syncStoreOrderFromDelivery } from './store-order-sync.service';
+import {
+  SQL_USER_HAS_ACTIVE_CRITICAL_MAINTENANCE,
+  userHasActiveCriticalMaintenance,
+} from '../utils/maintenance-block';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
@@ -318,12 +322,8 @@ export class DeliveryService {
           ORDER BY b."createdAt" DESC
           LIMIT 1
         ) as bike,
-        -- Verificar se tem manutenção crítica
-        EXISTS(
-          SELECT 1 FROM "MaintenanceLog" ml
-          WHERE ml."userId" = u.id
-            AND (ml.status = 'CRITICO' OR ml."wearPercentage" >= 0.9)
-        ) as "hasCriticalMaintenance"
+        -- Manutenção crítica: só o último log por peça (não histórico antigo)
+        (${SQL_USER_HAS_ACTIVE_CRITICAL_MAINTENANCE}) as "hasCriticalMaintenance"
        FROM "User" u
        LEFT JOIN "Wallet" w ON w."userId" = u.id
        LEFT JOIN "DeliveryOrder" rdo ON rdo."riderId" = u.id
@@ -514,19 +514,13 @@ export class DeliveryService {
       throw new Error('Entregador bloqueado para corridas. Entre em contato com o suporte.');
     }
 
-    // Verificar bloqueio por manutenção (a menos que tenha override)
+    // Verificar bloqueio por manutenção (a menos que tenha override admin).
+    // Usa só o estado atual por peça — marcar como feita no app libera automaticamente.
     if (!rider.maintenanceBlockOverride) {
-      const criticalMaintenance = await queryOne<{ exists: boolean }>(
-        `SELECT EXISTS(
-          SELECT 1 FROM "MaintenanceLog" ml
-          WHERE ml."userId" = $1
-            AND (ml.status = 'CRITICO' OR ml."wearPercentage" >= 0.9)
-        ) as exists`,
-        [riderId]
-      );
-
-      if (criticalMaintenance?.exists) {
-        throw new Error('Entregador bloqueado por manutenção crítica. Entre em contato com o suporte.');
+      if (await userHasActiveCriticalMaintenance(riderId)) {
+        throw new Error(
+          'Entregador bloqueado por manutenção crítica. Registe a manutenção na Garagem ou contacte o suporte.'
+        );
       }
     }
 

@@ -92,7 +92,7 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
          u.id, u.name, u.email, u.age, u."photoUrl", u."pilotProfile", u.role, u."partnerId",
          u."isSubscriber", u."subscriptionType", u."loyaltyPoints",
          u."currentLat", u."currentLng", u."isOnline", u."createdAt", u."updatedAt",
-         u."hasVerifiedDocuments", u."deliveryRiderBlocked",
+         u."hasVerifiedDocuments", u."deliveryRiderBlocked", u."maintenanceBlockOverride",
          ${USER_TYPE_SQL} as "userType"
        FROM "User" u
        ORDER BY u."createdAt" DESC`
@@ -330,6 +330,46 @@ router.put(
         message: blocked
           ? 'Entregador bloqueado: não receberá novas corridas.'
           : 'Bloqueio de corridas removido.',
+      });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * Override admin: permite aceitar corridas mesmo com manutenção crítica ativa.
+ * Uso: suporte libera temporariamente; o ideal é o piloto registar manutenção na Garagem
+ * (aí o bloqueio cai sozinho sem precisar de override).
+ */
+router.put(
+  '/:userId/maintenance-block-override',
+  authenticateToken,
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = getParam(req.params.userId);
+      const { override } = req.body as { override?: boolean };
+      if (typeof override !== 'boolean') {
+        return res.status(400).json({ error: 'Envie { "override": true | false }' });
+      }
+      const updated = await queryOne<User>(
+        `UPDATE "User"
+         SET "maintenanceBlockOverride" = $1, "updatedAt" = NOW()
+         WHERE id = $2
+         RETURNING id, "maintenanceBlockOverride", "deliveryRiderBlocked"`,
+        [override, userId]
+      );
+      if (!updated) {
+        return res.status(404).json({ error: 'Usuário não encontrado' });
+      }
+      res.json({
+        userId: updated.id,
+        maintenanceBlockOverride: (updated as any).maintenanceBlockOverride,
+        deliveryRiderBlocked: (updated as any).deliveryRiderBlocked,
+        message: override
+          ? 'Override ativo: entregador pode aceitar corridas mesmo com manutenção crítica.'
+          : 'Override removido: volta a aplicar o bloqueio por manutenção crítica.',
       });
     } catch (error: any) {
       res.status(400).json({ error: error.message });

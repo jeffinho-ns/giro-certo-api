@@ -120,6 +120,10 @@ router.get(
               'partName', ml."partName",
               'category', ml.category,
               'status', ml.status,
+              'wearPercentage', ml."wearPercentage",
+              'lastChangeKm', ml."lastChangeKm",
+              'currentKm', ml."currentKm",
+              'recommendedChangeKm', ml."recommendedChangeKm",
               'createdAt', ml."createdAt"
             ) ORDER BY ml."createdAt" DESC
           ) FILTER (WHERE ml.id IS NOT NULL),
