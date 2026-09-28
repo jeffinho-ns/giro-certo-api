@@ -16,6 +16,7 @@ import {
   SQL_USER_HAS_ACTIVE_CRITICAL_MAINTENANCE,
   userHasActiveCriticalMaintenance,
 } from '../utils/maintenance-block';
+import { dispatchIfoodMerchantOrder } from './ifood-client';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
@@ -605,6 +606,17 @@ export class DeliveryService {
         orderId,
         ledgerErr?.message
       );
+    }
+    const ifoodOrderId = (finalOrder as DeliveryOrder & { ifoodOrderId?: string | null })
+      .ifoodOrderId;
+    if (ifoodOrderId) {
+      void dispatchIfoodMerchantOrder(ifoodOrderId).catch((ifoodErr: unknown) => {
+        console.warn(
+          '[ifood] dispatch apos aceite',
+          ifoodOrderId,
+          ifoodErr instanceof Error ? ifoodErr.message : ifoodErr
+        );
+      });
     }
     await this.storeIdempotencyResponse(scope, idempotencyKey, finalOrder);
     return finalOrder;

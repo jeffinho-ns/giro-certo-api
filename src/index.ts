@@ -30,6 +30,8 @@ import webhooksRoutes from './routes/webhooks.routes';
 import settlementRoutes from './routes/settlement.routes';
 import storeRoutes from './routes/store.routes';
 import realtimeRoutes from './routes/realtime.routes';
+import ifoodRoutes from './routes/ifood.routes';
+import { startIfoodOrderPoller } from './services/ifood-order-poller';
 import { UserRole } from './types';
 import { DeliveryService } from './services/delivery.service';
 import {
@@ -132,6 +134,7 @@ app.use('/api/maps', mapsRoutes);
 app.use('/api/settlement', settlementRoutes);
 app.use('/api/store', storeRoutes);
 app.use('/api/realtime', realtimeRoutes);
+app.use('/api/ifood', ifoodRoutes);
 
 // Error handler
 app.use(errorHandler);
@@ -286,4 +289,5 @@ httpServer.listen(PORT, () => {
   console.log(`🚀 Giro Certo API rodando na porta ${PORT}`);
   console.log(`📡 WebSocket disponível na porta ${PORT}`);
   console.log(`📍 API disponível em http://localhost:${PORT}`);
+  startIfoodOrderPoller(app);
 });

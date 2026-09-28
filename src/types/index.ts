@@ -380,6 +380,8 @@ export interface Partner {
   delivery_settlement_frequency?: string | null;
   payout_bank_account_json?: Record<string, unknown> | null;
   linked_users?: Array<{ id: string; name: string; email: string | null }>;
+  /** Store/chain ID do iFood. Vazio = loja sem integração. */
+  ifoodMerchantId?: string | null;
 }
 
 export interface PartnerPayment {
@@ -428,6 +430,8 @@ export interface DeliveryOrder {
   cancelledAt: Date | null;
   /** Pedido de compra de origem (loja virtual), quando aplicável. */
   storeOrderId?: string | null;
+  /** Pedido de origem no iFood, quando a corrida veio de entrega própria. */
+  ifoodOrderId?: string | null;
 }
 
 export interface Wallet {
@@ -589,6 +593,7 @@ export interface CreatePartnerDto {
   maxServiceRadius?: number;
   avgPreparationTime?: number;
   operatingHours?: any;
+  ifoodMerchantId?: string | null;
 }
 
 export interface UpdatePartnerDto {
@@ -612,6 +617,7 @@ export interface UpdatePartnerDto {
   storeDeliveryFeeMode?: StoreDeliveryFeeMode;
   storeDeliveryFeeMax?: number | null;
   storeDeliveryFeeFixed?: number | null;
+  ifoodMerchantId?: string | null;
 }
 
 export interface CreatePartnerPaymentDto {
