@@ -73,16 +73,76 @@ export async function confirmIfoodOrder(orderId: string): Promise<void> {
   throw new Error(payload.error?.message || `Falha ao confirmar pedido iFood (${response.status}).`);
 }
 
-/** Avisa o iFood que a loja despachou com entrega própria, depois que um motociclista aceita. */
+type IfoodCancellationReason = {
+  cancelCodeId: string;
+  description: string;
+};
+
+function ifoodCallSucceeded(status: number, payload: { error?: { message?: string }; message?: string }): boolean {
+  if (status === 200 || status === 201 || status === 202 || status === 204 || status === 409) return true;
+  const message = `${payload.error?.message || ''} ${payload.message || ''}`.toLowerCase();
+  return message.includes('already') || message.includes('já') || message.includes('ja ');
+}
+
+/** Avisa o iFood que a loja despachou com entrega própria. */
 export async function dispatchIfoodMerchantOrder(orderId: string): Promise<void> {
   const response = await ifoodFetch(`/order/v1.0/orders/${orderId}/dispatch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ deliveredBy: 'MERCHANT' }),
   });
-  if (response.ok || response.status === 202 || response.status === 409) return;
-  const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
-  throw new Error(payload.error?.message || `Falha ao despachar pedido iFood (${response.status}).`);
+  const payload = (await response.json().catch(() => ({}))) as {
+    error?: { message?: string };
+    message?: string;
+  };
+  if (ifoodCallSucceeded(response.status, payload)) return;
+  throw new Error(payload.error?.message || payload.message || `Falha ao despachar pedido iFood (${response.status}).`);
+}
+
+export async function listIfoodCancellationReasons(orderId: string): Promise<IfoodCancellationReason[]> {
+  const response = await ifoodFetch(`/order/v1.0/orders/${orderId}/cancellationReasons`);
+  const payload = (await response.json().catch(() => [])) as
+    | IfoodCancellationReason[]
+    | { error?: { message?: string } };
+  if (!response.ok || !Array.isArray(payload)) return [];
+  return payload.filter((reason) => reason?.cancelCodeId && reason?.description);
+}
+
+/** Cancela o pedido no iFood pela loja. Não chama motoboy. */
+export async function cancelIfoodOrder(orderId: string): Promise<void> {
+  const reasons = await listIfoodCancellationReasons(orderId);
+  const reason = reasons.find((item) => item.cancelCodeId === '509') || reasons[0];
+  const cancellationCode = reason?.cancelCodeId || '509';
+  const description = reason?.description || 'Dificuldades internas do restaurante';
+  const response = await ifoodFetch(`/order/v1.0/orders/${orderId}/requestCancellation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      cancellationCode,
+      reason: description,
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    error?: { message?: string };
+    message?: string;
+  };
+  if (ifoodCallSucceeded(response.status, payload)) return;
+  throw new Error(payload.error?.message || payload.message || `Falha ao cancelar pedido iFood (${response.status}).`);
+}
+
+/** Aceita um cancelamento pedido pelo cliente no iFood. */
+export async function acceptIfoodCancellation(orderId: string): Promise<void> {
+  const response = await ifoodFetch(`/order/v1.0/orders/${orderId}/acceptCancellation`, {
+    method: 'POST',
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    error?: { message?: string };
+    message?: string;
+  };
+  if (ifoodCallSucceeded(response.status, payload)) return;
+  throw new Error(
+    payload.error?.message || payload.message || `Falha ao aceitar cancelamento iFood (${response.status}).`
+  );
 }
 
 export type IfoodEvent = {

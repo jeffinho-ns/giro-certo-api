@@ -1,10 +1,14 @@
 import type { Application } from 'express';
 import { query, queryOne } from '../lib/db';
 import type { DeliveryOrder, Partner } from '../types';
+import { DeliveryStatus } from '../types';
 import { DeliveryService } from './delivery.service';
 import {
+  acceptIfoodCancellation,
   acknowledgeIfoodEvents,
+  cancelIfoodOrder,
   confirmIfoodOrder,
+  dispatchIfoodMerchantOrder,
   fetchIfoodOrder,
   pollIfoodEvents,
 } from './ifood-client';
@@ -37,9 +41,23 @@ function formatAddress(address: IfoodAddress): string {
     .join(', ');
 }
 
+function eventCode(event: { code?: string; fullCode?: string }): string {
+  return (event.fullCode || event.code || '').toUpperCase();
+}
+
 function isPlacedEvent(event: { code?: string; fullCode?: string }): boolean {
-  const code = (event.fullCode || event.code || '').toUpperCase();
+  const code = eventCode(event);
   return code === 'PLACED' || code === 'PLC';
+}
+
+function isCancellationRequest(event: { code?: string; fullCode?: string }): boolean {
+  const code = eventCode(event);
+  return code === 'CANCELLATION_REQUESTED' || code === 'CAR';
+}
+
+function isCancelledEvent(event: { code?: string; fullCode?: string }): boolean {
+  const code = eventCode(event);
+  return code === 'CANCELLED' || code === 'CAN';
 }
 
 export class IfoodOrderImportService {
@@ -116,11 +134,15 @@ export class IfoodOrderImportService {
     const orderAmount = Number(total?.orderAmount);
     const value = Number.isFinite(subTotal) ? subTotal : Number.isFinite(orderAmount) ? orderAmount : 0;
     const isTest = raw.isTest === true;
+    const portalTest =
+      isTest ||
+      deliveryAddress.toUpperCase().includes('TESTE') ||
+      (latitude === 0 && longitude === 0);
     const displayId = String(raw.displayId || ifoodOrderId);
     const observations = typeof delivery?.observations === 'string' ? delivery.observations : '';
     const notes = [
       `Pedido iFood #${displayId}.`,
-      isTest ? 'TESTE iFood — não entregar.' : '',
+      portalTest ? 'TESTE iFood — não entregar.' : '',
       observations,
     ]
       .filter(Boolean)
@@ -160,7 +182,7 @@ export class IfoodOrderImportService {
       );
     }
 
-    if (isTest) {
+    if (portalTest) {
       return {
         ifoodOrderId,
         created: true,
@@ -194,9 +216,16 @@ export class IfoodOrderImportService {
     for (const event of events) {
       if (!event.id) continue;
       ackIds.push(event.id);
-      if (!isPlacedEvent(event) || !event.orderId) continue;
+      if (!event.orderId) continue;
       try {
-        results.push(await this.importOrder(event.orderId, app));
+        if (isPlacedEvent(event)) {
+          results.push(await this.importOrder(event.orderId, app));
+        } else if (isCancellationRequest(event)) {
+          await acceptIfoodCancellation(event.orderId);
+          await this.markLocalOrderCancelled(event.orderId);
+        } else if (isCancelledEvent(event)) {
+          await this.markLocalOrderCancelled(event.orderId);
+        }
       } catch (error) {
         console.warn(
           '[ifood] import',
@@ -209,5 +238,60 @@ export class IfoodOrderImportService {
       await acknowledgeIfoodEvents(ackIds);
     }
     return results;
+  }
+
+  /** Avisa o iFood que a entrega própria saiu, sem oferecer a corrida a motoboys. */
+  async dispatchWithoutRiders(ifoodOrderId: string): Promise<{
+    ifoodOrderId: string;
+    deliveryOrderId: string | null;
+    announcedToRiders: false;
+  }> {
+    const existing = await queryOne<DeliveryOrder>(
+      'SELECT * FROM "DeliveryOrder" WHERE "ifoodOrderId" = $1',
+      [ifoodOrderId]
+    );
+    if (existing && existing.status !== DeliveryStatus.awaiting_dispatch) {
+      throw new Error(
+        'Esse pedido já foi oferecido a motoboy ou encerrado. O despacho sem corrida só vale para pedido de teste ainda parado.'
+      );
+    }
+    await dispatchIfoodMerchantOrder(ifoodOrderId);
+    return {
+      ifoodOrderId,
+      deliveryOrderId: existing?.id ?? null,
+      announcedToRiders: false,
+    };
+  }
+
+  /** Cancela no iFood e encerra a corrida local, sem chamar motoboy. */
+  async cancelOrder(ifoodOrderId: string): Promise<{
+    ifoodOrderId: string;
+    deliveryOrderId: string | null;
+  }> {
+    await cancelIfoodOrder(ifoodOrderId);
+    const existing = await queryOne<DeliveryOrder>(
+      'SELECT * FROM "DeliveryOrder" WHERE "ifoodOrderId" = $1',
+      [ifoodOrderId]
+    );
+    if (
+      existing &&
+      existing.status !== DeliveryStatus.cancelled &&
+      existing.status !== DeliveryStatus.completed
+    ) {
+      await this.deliveryService.updateOrderStatus(existing.id, {
+        status: DeliveryStatus.cancelled,
+      });
+    }
+    return { ifoodOrderId, deliveryOrderId: existing?.id ?? null };
+  }
+
+  private async markLocalOrderCancelled(ifoodOrderId: string): Promise<void> {
+    await query(
+      `UPDATE "DeliveryOrder"
+       SET status = 'cancelled', "cancelledAt" = COALESCE("cancelledAt", NOW())
+       WHERE "ifoodOrderId" = $1
+         AND status NOT IN ('completed', 'cancelled')`,
+      [ifoodOrderId]
+    );
   }
 }

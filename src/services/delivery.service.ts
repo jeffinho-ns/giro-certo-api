@@ -16,7 +16,7 @@ import {
   SQL_USER_HAS_ACTIVE_CRITICAL_MAINTENANCE,
   userHasActiveCriticalMaintenance,
 } from '../utils/maintenance-block';
-import { dispatchIfoodMerchantOrder } from './ifood-client';
+import { cancelIfoodOrder, dispatchIfoodMerchantOrder } from './ifood-client';
 
 export class DeliveryService {
   private readonly alertService = new AlertService();
@@ -819,10 +819,23 @@ export class DeliveryService {
       await incrementOpsMetric('orders_cancelled_total', 1, currentStatus);
     }
 
+    const ifoodOrderIdOnCancel =
+      nextStatus === DeliveryStatus.cancelled ? order.ifoodOrderId : null;
+
     updateQuery += ' WHERE id = $' + (params.length + 1);
     params.push(orderId);
 
     await query(updateQuery, params);
+
+    if (ifoodOrderIdOnCancel) {
+      void cancelIfoodOrder(ifoodOrderIdOnCancel).catch((ifoodErr: unknown) => {
+        console.warn(
+          '[ifood] cancel',
+          ifoodOrderIdOnCancel,
+          ifoodErr instanceof Error ? ifoodErr.message : ifoodErr
+        );
+      });
+    }
 
     const updatedOrder =
       (await this.getOrderBroadcastSnapshot(orderId)) ||
