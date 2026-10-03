@@ -50,6 +50,11 @@ function isPlacedEvent(event: { code?: string; fullCode?: string }): boolean {
   return code === 'PLACED' || code === 'PLC';
 }
 
+function isConfirmedEvent(event: { code?: string; fullCode?: string }): boolean {
+  const code = eventCode(event);
+  return code === 'CONFIRMED' || code === 'CFM';
+}
+
 function isCancellationRequest(event: { code?: string; fullCode?: string }): boolean {
   const code = eventCode(event);
   return code === 'CANCELLATION_REQUESTED' || code === 'CAR';
@@ -60,12 +65,18 @@ function isCancelledEvent(event: { code?: string; fullCode?: string }): boolean 
   return code === 'CANCELLED' || code === 'CAN';
 }
 
+function isConcludedEvent(event: { code?: string; fullCode?: string }): boolean {
+  const code = eventCode(event);
+  return code === 'CONCLUDED' || code === 'CON';
+}
+
 export class IfoodOrderImportService {
   constructor(private readonly deliveryService = new DeliveryService()) {}
 
   async importOrder(
     ifoodOrderId: string,
-    app?: Application
+    app?: Application,
+    options?: { storeAlreadyAccepted?: boolean }
   ): Promise<IfoodImportResult> {
     const existing = await queryOne<DeliveryOrder>(
       'SELECT * FROM "DeliveryOrder" WHERE "ifoodOrderId" = $1',
@@ -172,28 +183,32 @@ export class IfoodOrderImportService {
       created.id,
     ]);
 
-    try {
-      await confirmIfoodOrder(ifoodOrderId);
-    } catch (error) {
-      console.warn(
-        '[ifood] confirm',
-        ifoodOrderId,
-        error instanceof Error ? error.message : error
-      );
+    const mode = partner.ifoodAcceptMode === 'immediate' ? 'immediate' : 'after_ifood_accept';
+    const alreadyAccepted = options?.storeAlreadyAccepted === true;
+    if (mode === 'immediate' && !alreadyAccepted) {
+      try {
+        await confirmIfoodOrder(ifoodOrderId);
+      } catch (error) {
+        console.warn(
+          '[ifood] confirm',
+          ifoodOrderId,
+          error instanceof Error ? error.message : error
+        );
+      }
     }
 
-    if (portalTest) {
+    const shouldCallRiders = !portalTest && (mode === 'immediate' || alreadyAccepted);
+    if (!shouldCallRiders) {
       return {
         ifoodOrderId,
         created: true,
         dispatched: false,
         deliveryOrderId: created.id,
-        reason: 'test_order_not_dispatched',
+        reason: portalTest ? 'test_order_not_dispatched' : 'waiting_ifood_accept',
       };
     }
 
-    const dispatched = await this.deliveryService.dispatchOrder(created.id);
-    await this.deliveryService.announceOrderToRiders(dispatched, app);
+    const dispatched = await this.offerToRiders(created.id, app);
     return {
       ifoodOrderId,
       created: true,
@@ -201,6 +216,52 @@ export class IfoodOrderImportService {
       deliveryOrderId: dispatched.id,
       reason: 'dispatched',
     };
+  }
+
+  /** O gerente aceitou no iFood. Só então a corrida vai para os motoboys. */
+  async handleStoreAccepted(
+    ifoodOrderId: string,
+    app?: Application
+  ): Promise<IfoodImportResult> {
+    const existing = await queryOne<DeliveryOrder>(
+      'SELECT * FROM "DeliveryOrder" WHERE "ifoodOrderId" = $1',
+      [ifoodOrderId]
+    );
+    if (!existing) {
+      return this.importOrder(ifoodOrderId, app, { storeAlreadyAccepted: true });
+    }
+    if (existing.status !== DeliveryStatus.awaiting_dispatch) {
+      return {
+        ifoodOrderId,
+        created: false,
+        dispatched: true,
+        deliveryOrderId: existing.id,
+        reason: 'already_dispatched',
+      };
+    }
+    if ((existing.notes || '').includes('TESTE iFood')) {
+      return {
+        ifoodOrderId,
+        created: false,
+        dispatched: false,
+        deliveryOrderId: existing.id,
+        reason: 'test_order_not_dispatched',
+      };
+    }
+    const dispatched = await this.offerToRiders(existing.id, app);
+    return {
+      ifoodOrderId,
+      created: false,
+      dispatched: true,
+      deliveryOrderId: dispatched.id,
+      reason: 'dispatched_after_ifood_accept',
+    };
+  }
+
+  private async offerToRiders(orderId: string, app?: Application): Promise<DeliveryOrder> {
+    const dispatched = await this.deliveryService.dispatchOrder(orderId);
+    await this.deliveryService.announceOrderToRiders(dispatched, app);
+    return dispatched;
   }
 
   async pollLinkedMerchants(app?: Application): Promise<IfoodImportResult[]> {
@@ -220,11 +281,15 @@ export class IfoodOrderImportService {
       try {
         if (isPlacedEvent(event)) {
           results.push(await this.importOrder(event.orderId, app));
+        } else if (isConfirmedEvent(event)) {
+          results.push(await this.handleStoreAccepted(event.orderId, app));
         } else if (isCancellationRequest(event)) {
           await acceptIfoodCancellation(event.orderId);
           await this.markLocalOrderCancelled(event.orderId);
         } else if (isCancelledEvent(event)) {
           await this.markLocalOrderCancelled(event.orderId);
+        } else if (isConcludedEvent(event)) {
+          await this.markLocalOrderConcluded(event.orderId);
         }
       } catch (error) {
         console.warn(
@@ -250,6 +315,11 @@ export class IfoodOrderImportService {
       'SELECT * FROM "DeliveryOrder" WHERE "ifoodOrderId" = $1',
       [ifoodOrderId]
     );
+    if (existing && !(existing.notes || '').includes('TESTE iFood')) {
+      throw new Error(
+        'Pedido real espera o fluxo da loja. O despacho sem motoboy só vale para pedido de teste da homologação.'
+      );
+    }
     if (existing && existing.status !== DeliveryStatus.awaiting_dispatch) {
       throw new Error(
         'Esse pedido já foi oferecido a motoboy ou encerrado. O despacho sem corrida só vale para pedido de teste ainda parado.'
@@ -289,6 +359,16 @@ export class IfoodOrderImportService {
     await query(
       `UPDATE "DeliveryOrder"
        SET status = 'cancelled', "cancelledAt" = COALESCE("cancelledAt", NOW())
+       WHERE "ifoodOrderId" = $1
+         AND status NOT IN ('completed', 'cancelled')`,
+      [ifoodOrderId]
+    );
+  }
+
+  private async markLocalOrderConcluded(ifoodOrderId: string): Promise<void> {
+    await query(
+      `UPDATE "DeliveryOrder"
+       SET status = 'completed', "completedAt" = COALESCE("completedAt", NOW())
        WHERE "ifoodOrderId" = $1
          AND status NOT IN ('completed', 'cancelled')`,
       [ifoodOrderId]

@@ -7,11 +7,13 @@ import {
   MatchingCriteria,
   WhatsAppOrderWebhookDto,
   UserRole,
+  DeliveryStatus,
 } from '../types';
 import { AuthRequest } from '../middleware/auth';
 import { getIo, ioEmit, ioEmitToRoom } from '../utils/socket-events';
 import { DeliveryPricingService } from '../services/delivery-pricing.service';
 import { DeliveryPaymentService } from '../services/delivery-payment.service';
+import { queryOne } from '../lib/db';
 
 const deliveryService = new DeliveryService();
 const deliveryPricingService = new DeliveryPricingService();
@@ -247,6 +249,19 @@ export class DeliveryController {
     try {
       const existing = await deliveryService.getOrderById(orderId);
       await this.assertCanManageOrder(req, existing.storeId);
+
+      if (existing.ifoodOrderId && existing.status === DeliveryStatus.awaiting_dispatch) {
+        const partner = await queryOne<{ ifoodAcceptMode: string | null }>(
+          'SELECT "ifoodAcceptMode" FROM "Partner" WHERE id = $1',
+          [existing.storeId]
+        );
+        if (partner?.ifoodAcceptMode !== 'immediate') {
+          return res.status(409).json({
+            error:
+              'Este pedido espera o aceite no iFood. O motoboy entra sozinho quando o gerente aceitar lá.',
+          });
+        }
+      }
 
       await deliveryPaymentService.assertPaidIfPartnerRequiresPrepaid(
         orderId,

@@ -382,6 +382,8 @@ export interface Partner {
   linked_users?: Array<{ id: string; name: string; email: string | null }>;
   /** Store/chain ID do iFood. Vazio = loja sem integração. */
   ifoodMerchantId?: string | null;
+  /** after_ifood_accept espera o gerente. immediate confirma e chama o motoboy na hora. */
+  ifoodAcceptMode?: 'after_ifood_accept' | 'immediate' | null;
 }
 
 export interface PartnerPayment {
@@ -594,6 +596,7 @@ export interface CreatePartnerDto {
   avgPreparationTime?: number;
   operatingHours?: any;
   ifoodMerchantId?: string | null;
+  ifoodAcceptMode?: 'after_ifood_accept' | 'immediate' | null;
 }
 
 export interface UpdatePartnerDto {
@@ -618,6 +621,7 @@ export interface UpdatePartnerDto {
   storeDeliveryFeeMax?: number | null;
   storeDeliveryFeeFixed?: number | null;
   ifoodMerchantId?: string | null;
+  ifoodAcceptMode?: 'after_ifood_accept' | 'immediate' | null;
 }
 
 export interface CreatePartnerPaymentDto {

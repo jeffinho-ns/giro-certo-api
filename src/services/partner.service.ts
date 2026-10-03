@@ -12,7 +12,7 @@ import {
   UserRole,
 } from '../types';
 import { generateId } from '../utils/id';
-import { normalizeIfoodMerchantId } from '../utils/ifood-merchant-id';
+import { normalizeIfoodAcceptMode, normalizeIfoodMerchantId } from '../utils/ifood-merchant-id';
 import { uniqueSlug } from '../utils/slug';
 import {
   parseStoreDeliveryFeeConfig,
@@ -183,8 +183,8 @@ export class PartnerService {
           phone, email, specialties, "photoUrl",
           cnpj, "companyName", "tradingName", "stateRegistration",
           "maxServiceRadius", "avgPreparationTime", "operatingHours",
-          "isBlocked", "ifoodMerchantId", "createdAt", "updatedAt"
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW(), NOW())`,
+          "isBlocked", "ifoodMerchantId", "ifoodAcceptMode", "createdAt", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NOW(), NOW())`,
         [
           partnerId,
           data.name,
@@ -206,6 +206,7 @@ export class PartnerService {
           data.operatingHours ? JSON.stringify(data.operatingHours) : null,
           false, // isBlocked
           normalizeIfoodMerchantId(data.ifoodMerchantId),
+          normalizeIfoodAcceptMode(data.ifoodAcceptMode),
         ]
       );
 
@@ -500,6 +501,12 @@ export class PartnerService {
     if (data.ifoodMerchantId !== undefined) {
       updateFields.push(`"ifoodMerchantId" = $${paramIndex}`);
       params.push(normalizeIfoodMerchantId(data.ifoodMerchantId));
+      paramIndex++;
+    }
+
+    if (data.ifoodAcceptMode !== undefined) {
+      updateFields.push(`"ifoodAcceptMode" = $${paramIndex}`);
+      params.push(normalizeIfoodAcceptMode(data.ifoodAcceptMode));
       paramIndex++;
     }
 
