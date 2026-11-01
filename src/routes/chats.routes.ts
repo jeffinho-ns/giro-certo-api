@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import multer, { MulterError } from 'multer';
+import multer from 'multer';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { ChatHttpError, ChatIo, asRecord, parseFlag, parseUserId } from '../services/chat.types';
 import {
@@ -161,11 +161,15 @@ router.post(
   })
 );
 
+function isMulterLimit(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  return (err as { code?: unknown }).code === 'LIMIT_FILE_SIZE';
+}
+
 router.post('/media', (req: AuthRequest, res: Response) => {
   chatUpload.single('file')(req, res, (err: unknown) => {
     if (err) {
-      const multerError = err instanceof MulterError ? err : null;
-      const tooBig = multerError?.code === 'LIMIT_FILE_SIZE';
+      const tooBig = isMulterLimit(err);
       const message = tooBig
         ? 'Ficheiro demasiado grande (máx. 15MB).'
         : err instanceof Error
