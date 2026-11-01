@@ -480,10 +480,24 @@ export interface Story {
   updatedAt: Date;
 }
 
+export type ChatKind = 'private' | 'group';
+export type ChatMessageType = 'text' | 'voice' | 'image' | 'location' | 'system';
+export type ChatMemberRole = 'leader' | 'support' | 'sweep' | 'member';
+
 export interface ChatConversation {
   id: string;
-  participant1Id: string;
-  participant2Id: string;
+  type: ChatKind;
+  participant1Id: string | null;
+  participant2Id: string | null;
+  title: string | null;
+  imageUrl: string | null;
+  createdById: string | null;
+  eventId: string | null;
+  pinnedMessageId: string | null;
+  meetupLabel: string | null;
+  meetupLat: number | null;
+  meetupLng: number | null;
+  meetupAt: Date | null;
   lastMessageAt: Date | null;
   lastMessagePreview: string | null;
   createdAt: Date;
@@ -495,8 +509,84 @@ export interface ChatMessage {
   chatId: string;
   senderId: string;
   text: string;
+  type: ChatMessageType;
+  mediaUrl: string | null;
+  mediaDurationMs: number | null;
+  replyToId: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  locationLabel: string | null;
+  deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ConversationDto {
+  id: string;
+  title: string;
+  lastMessagePreview: string;
+  lastMessageAt: string | null;
+  isGroup: boolean;
+  imageUrl: string | null;
+  imageUrlOrUserId: string | null;
+  unreadCount: number;
+  pinned: boolean;
+  archived: boolean;
+  muted: boolean;
+  eventId: string | null;
+  myRole: ChatMemberRole | null;
+  meetupLabel: string | null;
+  meetupLat: number | null;
+  meetupLng: number | null;
+  meetupAt: string | null;
+}
+
+export interface MessageDto {
+  id: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  createdAt: string;
+  isFromMe: boolean;
+  type: ChatMessageType;
+  mediaUrl: string | null;
+  mediaDurationMs: number | null;
+  replyToId: string | null;
+  replyPreview: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  locationLabel: string | null;
+  deleted: boolean;
+}
+
+export interface ChatParticipantDto {
+  id: string;
+  name: string;
+  photoUrl: string | null;
+  role: ChatMemberRole | null;
+}
+
+export interface ChatSettingsDto {
+  chat: {
+    id: string;
+    isGroup: boolean;
+    title: string;
+    myRole: ChatMemberRole | null;
+    eventId: string | null;
+    meetupLabel: string | null;
+    meetupLat: number | null;
+    meetupLng: number | null;
+    meetupAt: string | null;
+  };
+  participants: ChatParticipantDto[];
+  muted: boolean;
+  peerLastReadAt: string | null;
+}
+
+export interface ChatPersonDto {
+  id: string;
+  name: string;
+  photoUrl: string | null;
 }
 
 export interface PostReport {

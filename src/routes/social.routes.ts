@@ -3,8 +3,16 @@ import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { query, queryOne } from '../lib/db';
 import { generateId } from '../utils/id';
 import { calculateDistance } from '../utils/haversine';
+import {
+  EventRsvpHttpError,
+  getEventRsvp,
+  setEventRsvp,
+} from '../services/event-rsvp.service';
 
 const router = Router();
+
+const getParam = (value: string | string[] | undefined): string =>
+  Array.isArray(value) ? value[0] || '' : value || '';
 
 // GET /api/social/events — eventos da rede social (para mapa e lista)
 router.get('/events', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -35,6 +43,40 @@ router.get('/events', authenticateToken, async (req: AuthRequest, res: Response)
     res.json({ events });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// GET /api/social/events/:eventId/rsvp — o meu RSVP + contagens
+router.get('/events/:eventId/rsvp', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+    const eventId = getParam(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'eventId inválido' });
+    const result = await getEventRsvp(req.userId, eventId);
+    res.json(result);
+  } catch (error: unknown) {
+    if (error instanceof EventRsvpHttpError) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : 'Erro interno';
+    res.status(400).json({ error: message });
+  }
+});
+
+// PUT /api/social/events/:eventId/rsvp — gravar presença (só o próprio user)
+router.put('/events/:eventId/rsvp', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Não autenticado' });
+    const eventId = getParam(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'eventId inválido' });
+    const result = await setEventRsvp(req.userId, eventId, req.body);
+    res.json(result);
+  } catch (error: unknown) {
+    if (error instanceof EventRsvpHttpError) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : 'Erro interno';
+    res.status(400).json({ error: message });
   }
 });
 

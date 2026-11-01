@@ -43,6 +43,7 @@ import { incrementOpsMetric } from './utils/ops-metrics';
 import { persistRiderLocationFromSocketEvent } from './services/rider-location-persist.service';
 import { assertProductionEnv } from './utils/startup-env';
 import { query } from './lib/db';
+import { relayChatTyping } from './services/chat.service';
 
 dotenv.config();
 assertProductionEnv();
@@ -241,6 +242,17 @@ io.on('connection', (socket) => {
     if (orderId && typeof orderId === 'string') {
       socket.leave(`order:${orderId}`);
     }
+  });
+
+  socket.on('chat:typing', (data: { chatId?: unknown; isTyping?: unknown }) => {
+    const userId = socketUserId;
+    if (!userId) return;
+    const chatId = typeof data?.chatId === 'string' ? data.chatId.trim() : '';
+    if (!chatId) return;
+    const isTyping = data?.isTyping === true;
+    void relayChatTyping(io, userId, chatId, isTyping).catch((err: unknown) => {
+      console.warn('[chat:typing]', err);
+    });
   });
 
   // Escutar atualizações de localização dos motociclistas (persistência + broadcast com estrangulamento)

@@ -34,6 +34,8 @@
     "db:migrate:store-delivery-fee-policy": "node scripts/run-store-delivery-fee-policy-migration.js",
     "db:migrate:ifood-merchant": "node scripts/run-ifood-merchant-migration.js",
     "db:migrate:ifood-accept-mode": "node scripts/run-ifood-accept-mode-migration.js",
+    "db:migrate:chat-rich": "node scripts/run-chat-rich-migration.js",
+    "db:migrate:event-rsvp": "node scripts/run-event-rsvp-migration.js",
     "db:backfill:store-order-settlement": "node scripts/backfill-store-order-settlement.js"
   },
   "keywords": [
