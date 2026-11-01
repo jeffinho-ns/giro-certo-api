@@ -164,7 +164,8 @@ router.post(
 router.post('/media', (req: AuthRequest, res: Response) => {
   chatUpload.single('file')(req, res, (err: unknown) => {
     if (err) {
-      const tooBig = err instanceof MulterError && err.code === 'LIMIT_FILE_SIZE';
+      const multerError = err instanceof MulterError ? err : null;
+      const tooBig = multerError?.code === 'LIMIT_FILE_SIZE';
       const message = tooBig
         ? 'Ficheiro demasiado grande (máx. 15MB).'
         : err instanceof Error
