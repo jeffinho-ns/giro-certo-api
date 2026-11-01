@@ -14,7 +14,10 @@ export async function searchPeople(userId: string, rawQuery: string): Promise<Ch
     `SELECT u.id, u.name, u."photoUrl"
      FROM "User" u
      WHERE u.id <> $1
-       AND u.name ILIKE $2 ESCAPE '\\'
+       AND (
+         u.name ILIKE $2 ESCAPE '\\'
+         OR COALESCE(u.email, '') ILIKE $2 ESCAPE '\\'
+       )
        AND NOT EXISTS (
          SELECT 1 FROM "ChatBlock" b
          WHERE (b."blockerId" = $1 AND b."blockedId" = u.id)
